@@ -38,7 +38,10 @@ export function resultItemVhsAdvancedPreviewUrl(
 }
 
 export function resultItemUrlWithTimestamp(item: AugmentedResultItem): string {
-  return `${resultItemUrl(item)}&t=${+new Date()}`
+  const url = isHdrImageFilename(item.filename)
+    ? resultItemPreviewUrl(item)
+    : resultItemUrl(item)
+  return `${url}&t=${+new Date()}`
 }
 
 export function findResultIndexByUrl(
