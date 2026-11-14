@@ -25,6 +25,7 @@ interface Gate {
 const GATES: Gate[] = [
   { id: 'typecheck', modes: ['full'], command: 'pnpm', args: ['exec', 'tsc', '--noEmit'] },
   { id: 'unit', modes: ['full'], command: 'pnpm', args: ['exec', 'vitest', 'run'] },
+  { id: 'module-boundaries', modes: ['quick', 'full'], command: 'node', args: ['scripts/verify-module-boundaries.ts'] },
   {
     id: 'agent-note-classification',
     modes: ['quick', 'full'],

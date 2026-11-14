@@ -1,0 +1,783 @@
+import type { APIRequestContext, Locator, Page } from '@playwright/test'
+import { config as dotenvConfig } from 'dotenv'
+import MCR from 'monocart-coverage-reports'
+
+import { COVERAGE_OUTPUT_DIR } from '@e2e/coverageConfig'
+import { DEPLOY_ACTION_SEEN_SETTINGS } from '@e2e/fixtures/constants/workflowActions'
+import { networkIsolationFixture as base } from '@e2e/fixtures/networkIsolationFixture'
+import {
+  ENTRY_PATHS,
+  TOUR_SEEN_SETTING
+} from '@/platform/onboarding/onboardingTours'
+import { NodeBadgeMode } from '@/types/nodeSource'
+import {
+  EMPTY_BILLING_BALANCE,
+  EMPTY_BILLING_PLANS,
+  LEGACY_PERSONAL_BILLING_STATUS
+} from '@e2e/fixtures/data/cloudWorkspace'
+import { createBillingCapabilities } from '@e2e/fixtures/data/billingCapabilities'
+import {
+  UNSUBSCRIBED,
+  ZERO_BALANCE
+} from '@e2e/fixtures/data/subscriptionFixtures'
+import { ComfyActionbar } from '@e2e/fixtures/components/Actionbar'
+import { ComfyTemplates } from '@e2e/fixtures/components/Templates'
+import { ComfyMouse } from '@e2e/fixtures/ComfyMouse'
+import { TestIds } from '@e2e/fixtures/selectors'
+import { comfyExpect } from '@e2e/fixtures/utils/customMatchers'
+import {
+  installCustomNodeBlankStartup,
+  runWithCollectedCleanup
+} from '@e2e/fixtures/utils/customNodeSuite'
+import {
+  collectConsoleErrors,
+  recordStartupConsoleErrors
+} from '@e2e/fixtures/utils/consoleErrorCollector'
+import { trackVisibleErrors } from '@e2e/fixtures/utils/errorSurfaces'
+import { assetPath } from '@e2e/fixtures/utils/paths'
+import { nextFrame, sleep } from '@e2e/fixtures/utils/timing'
+import { mockWorkspace, workspace } from '@e2e/fixtures/utils/workspaceMocks'
+import { VueNodeHelpers } from '@e2e/fixtures/VueNodeHelpers'
+import { resolveSetupApiUrl } from '@e2e/utils/e2eConfig'
+import { BottomPanel } from '@e2e/fixtures/components/BottomPanel'
+import { ComfyNodeSearchBox } from '@e2e/fixtures/components/ComfyNodeSearchBox'
+import { ComfyNodeSearchBoxV2 } from '@e2e/fixtures/components/ComfyNodeSearchBoxV2'
+import { ConfirmDialog } from '@e2e/fixtures/components/ConfirmDialog'
+import { ContextMenu } from '@e2e/fixtures/components/ContextMenu'
+import { CurrentUserPopover } from '@e2e/fixtures/components/CurrentUserPopover'
+import { MediaLightbox } from '@e2e/fixtures/components/MediaLightbox'
+import { QueuePanel } from '@e2e/fixtures/components/QueuePanel'
+import { SettingDialog } from '@e2e/fixtures/components/SettingDialog'
+import { TemplatesDialog } from '@e2e/fixtures/components/TemplatesDialog'
+import { TitleEditor } from '@e2e/fixtures/components/TitleEditor'
+import {
+  AssetsSidebarTab,
+  ModelLibrarySidebarTab,
+  NodeLibrarySidebarTab,
+  NodeLibrarySidebarTabV2,
+  SidebarTab,
+  WorkflowsSidebarTab
+} from '@e2e/fixtures/components/SidebarTab'
+import { Topbar } from '@e2e/fixtures/components/Topbar'
+import { AppModeHelper } from '@e2e/fixtures/helpers/AppModeHelper'
+import { AssetsHelper } from '@e2e/fixtures/helpers/AssetsHelper'
+import { CanvasHelper } from '@e2e/fixtures/helpers/CanvasHelper'
+import { ClipboardHelper } from '@e2e/fixtures/helpers/ClipboardHelper'
+import { CloudAuthHelper } from '@e2e/fixtures/helpers/CloudAuthHelper'
+import { CommandHelper } from '@e2e/fixtures/helpers/CommandHelper'
+import { DragDropHelper } from '@e2e/fixtures/helpers/DragDropHelper'
+import { FeatureFlagHelper } from '@e2e/fixtures/helpers/FeatureFlagHelper'
+import { KeyboardHelper } from '@e2e/fixtures/helpers/KeyboardHelper'
+import { ModelLibraryHelper } from '@e2e/fixtures/helpers/ModelLibraryHelper'
+import { NodeOperationsHelper } from '@e2e/fixtures/helpers/NodeOperationsHelper'
+import { PerformanceHelper } from '@e2e/fixtures/helpers/PerformanceHelper'
+import { SettingsHelper } from '@e2e/fixtures/helpers/SettingsHelper'
+import { SubgraphHelper } from '@e2e/fixtures/helpers/SubgraphHelper'
+import { ToastHelper } from '@e2e/fixtures/helpers/ToastHelper'
+import { WorkflowHelper } from '@e2e/fixtures/helpers/WorkflowHelper'
+import type { WorkspaceStore } from '@e2e/types/globals'
+
+dotenvConfig()
+
+class ComfyPropertiesPanel {
+  readonly root: Locator
+  readonly panelTitle: Locator
+  readonly searchBox: Locator
+  readonly titleEditor: TitleEditor
+  readonly toggleButton: Locator
+  readonly closeButton: Locator
+
+  constructor(readonly page: Page) {
+    this.root = page.getByTestId(TestIds.propertiesPanel.root)
+    this.panelTitle = this.root.locator('h3')
+    this.searchBox = this.root.getByPlaceholder(/^Search/)
+    this.titleEditor = new TitleEditor(this.root)
+    this.toggleButton = page.getByRole('button', {
+      name: 'Toggle properties panel'
+    })
+    this.closeButton = this.root.getByRole('button', {
+      name: 'Toggle properties panel'
+    })
+  }
+}
+
+class ComfyMenu {
+  private _appsTab: SidebarTab | null = null
+  private _jobHistoryTab: SidebarTab | null = null
+  private _assetsTab: AssetsSidebarTab | null = null
+  private _modelLibraryTab: ModelLibrarySidebarTab | null = null
+  private _nodeLibraryTab: NodeLibrarySidebarTab | null = null
+  private _nodeLibraryTabV2: NodeLibrarySidebarTabV2 | null = null
+  private _workflowsTab: WorkflowsSidebarTab | null = null
+  private _topbar: Topbar | null = null
+
+  public readonly sideToolbar: Locator
+  public readonly propertiesPanel: ComfyPropertiesPanel
+  public readonly modeToggleButton: Locator
+  public readonly buttons: Locator
+
+  constructor(public readonly page: Page) {
+    this.sideToolbar = page.getByTestId(TestIds.sidebar.toolbar)
+    this.modeToggleButton = page.getByTestId(TestIds.sidebar.modeToggle)
+    this.propertiesPanel = new ComfyPropertiesPanel(page)
+    this.buttons = this.sideToolbar.locator('.side-bar-button')
+  }
+
+  get modelLibraryTab() {
+    this._modelLibraryTab ??= new ModelLibrarySidebarTab(this.page)
+    return this._modelLibraryTab
+  }
+
+  get nodeLibraryTab() {
+    this._nodeLibraryTab ??= new NodeLibrarySidebarTab(this.page)
+    return this._nodeLibraryTab
+  }
+
+  get nodeLibraryTabV2() {
+    this._nodeLibraryTabV2 ??= new NodeLibrarySidebarTabV2(this.page)
+    return this._nodeLibraryTabV2
+  }
+
+  get appsTab() {
+    this._appsTab ??= new SidebarTab(this.page, 'apps')
+    return this._appsTab
+  }
+
+  get jobHistoryTab() {
+    this._jobHistoryTab ??= new SidebarTab(this.page, 'job-history')
+    return this._jobHistoryTab
+  }
+
+  get assetsTab() {
+    this._assetsTab ??= new AssetsSidebarTab(this.page)
+    return this._assetsTab
+  }
+
+  get workflowsTab() {
+    this._workflowsTab ??= new WorkflowsSidebarTab(this.page)
+    return this._workflowsTab
+  }
+
+  get topbar() {
+    this._topbar ??= new Topbar(this.page)
+    return this._topbar
+  }
+
+  async toggleTheme() {
+    const currentTheme = await this.getThemeId()
+    await this.modeToggleButton.click()
+    await this.page.waitForFunction(
+      (prevTheme) => {
+        const settings = window.app?.ui.settings
+        return (
+          settings &&
+          settings.getSettingValue('Comfy.ColorPalette') !== prevTheme
+        )
+      },
+      currentTheme,
+      { timeout: 5000 }
+    )
+  }
+
+  async getThemeId() {
+    return await this.page.evaluate(async () => {
+      return await window.app!.ui.settings.getSettingValue('Comfy.ColorPalette')
+    })
+  }
+}
+
+export class ComfyPage {
+  public readonly url: string
+  public readonly apiUrl: string
+  // All canvas position operations are based on default view of canvas.
+  public readonly canvas: Locator
+  public readonly selectionToolbox: Locator
+  public readonly widgetTextBox: Locator
+
+  // Buttons
+  public readonly resetViewButton: Locator
+  public readonly queueButton: Locator // Run button in Legacy UI
+  public readonly runButton: Locator // Run button (renamed "Queue" -> "Run")
+
+  // Inputs
+  public readonly workflowUploadInput: Locator
+
+  // Components
+  public readonly searchBox: ComfyNodeSearchBox
+  public readonly searchBoxV2: ComfyNodeSearchBoxV2
+  public readonly menu: ComfyMenu
+  public readonly actionbar: ComfyActionbar
+  public readonly templates: ComfyTemplates
+  public readonly settingDialog: SettingDialog
+  public readonly confirmDialog: ConfirmDialog
+  public readonly templatesDialog: TemplatesDialog
+  public readonly titleEditor: TitleEditor
+  public readonly mediaLightbox: MediaLightbox
+  public readonly vueNodes: VueNodeHelpers
+  public readonly appMode: AppModeHelper
+  public readonly subgraph: SubgraphHelper
+  public readonly canvasOps: CanvasHelper
+  public readonly nodeOps: NodeOperationsHelper
+  public readonly settings: SettingsHelper
+  public readonly keyboard: KeyboardHelper
+  public readonly clipboard: ClipboardHelper
+  public readonly workflow: WorkflowHelper
+  public readonly contextMenu: ContextMenu
+  public readonly currentUserPopover: CurrentUserPopover
+  public readonly toast: ToastHelper
+  public readonly dragDrop: DragDropHelper
+  public readonly featureFlags: FeatureFlagHelper
+  public readonly command: CommandHelper
+  public readonly bottomPanel: BottomPanel
+  public readonly queuePanel: QueuePanel
+  public readonly perf: PerformanceHelper
+  public readonly assets: AssetsHelper
+  public readonly modelLibrary: ModelLibraryHelper
+  public readonly cloudAuth: CloudAuthHelper
+
+  /** Worker index to test user ID */
+  public readonly userIds: string[] = []
+
+  /** Whether the current test runs in Vue Nodes mode (initialized from `@vue-nodes` tag). */
+  public isVueNodes = false
+
+  /** Test user ID for the current context */
+  get id() {
+    return this.userIds[comfyPageFixture.info().parallelIndex]
+  }
+
+  constructor(
+    public readonly page: Page,
+    public readonly request: APIRequestContext
+  ) {
+    this.url = process.env.PLAYWRIGHT_TEST_URL || 'http://localhost:8188'
+    this.apiUrl = resolveSetupApiUrl()
+    this.canvas = page.locator('#graph-canvas')
+    this.selectionToolbox = page.getByTestId(TestIds.selectionToolbox.root)
+    this.widgetTextBox = page.getByPlaceholder('text').nth(1)
+    this.resetViewButton = page.getByRole('button', { name: 'Reset View' })
+    this.queueButton = page.getByRole('button', { name: 'Queue Prompt' })
+    this.runButton = page.getByTestId(TestIds.topbar.queueButton)
+    this.workflowUploadInput = page.locator('#comfy-file-input')
+
+    this.searchBox = new ComfyNodeSearchBox(page)
+    this.searchBoxV2 = new ComfyNodeSearchBoxV2(this)
+    this.menu = new ComfyMenu(page)
+    this.actionbar = new ComfyActionbar(page)
+    this.templates = new ComfyTemplates(page)
+    this.settingDialog = new SettingDialog(page, this)
+    this.confirmDialog = new ConfirmDialog(page)
+    this.templatesDialog = new TemplatesDialog(page)
+    this.titleEditor = new TitleEditor(page)
+    this.mediaLightbox = new MediaLightbox(page)
+    this.vueNodes = new VueNodeHelpers(page)
+    this.appMode = new AppModeHelper(this)
+    this.subgraph = new SubgraphHelper(this)
+    this.canvasOps = new CanvasHelper(page, this.canvas, this.resetViewButton)
+    this.nodeOps = new NodeOperationsHelper(this)
+    this.settings = new SettingsHelper(page)
+    this.keyboard = new KeyboardHelper(page, this.canvas)
+    this.clipboard = new ClipboardHelper(this.keyboard, page)
+    this.workflow = new WorkflowHelper(this)
+    this.contextMenu = new ContextMenu(page)
+    this.currentUserPopover = new CurrentUserPopover(page)
+    this.toast = new ToastHelper(page)
+    this.dragDrop = new DragDropHelper(page)
+    this.featureFlags = new FeatureFlagHelper(page)
+    this.command = new CommandHelper(page)
+    this.bottomPanel = new BottomPanel(page)
+    this.queuePanel = new QueuePanel(page)
+    this.perf = new PerformanceHelper(page)
+    this.assets = new AssetsHelper(page)
+    this.modelLibrary = new ModelLibraryHelper(page)
+    this.cloudAuth = new CloudAuthHelper(page)
+  }
+
+  async setupUser(username: string) {
+    const res = await this.request.get(`${this.apiUrl}/api/users`)
+    if (res.status() !== 200)
+      throw new Error(`Failed to retrieve users: ${await res.text()}`)
+
+    const apiRes = await res.json()
+    const user = Object.entries(apiRes?.users ?? {}).find(
+      ([, name]) => name === username
+    )
+    const id = user?.[0]
+
+    return id ? id : await this.createUser(username)
+  }
+
+  async createUser(username: string) {
+    const resp = await this.request.post(`${this.apiUrl}/api/users`, {
+      data: { username }
+    })
+
+    if (resp.status() !== 200) {
+      const body = await resp.text()
+      // Persistent backends (Comfy Desktop server user storage) keep the user
+      // across runs and do not list it via GET /api/users, so a duplicate means
+      // it already exists. Returns the username since the generated id is not
+      // retrievable here; only reached on single-user / default-resolving backends.
+      if (resp.status() === 400 && body.includes('Duplicate username.'))
+        return username
+      throw new Error(`Failed to create user: ${body}`)
+    }
+
+    return await resp.json()
+  }
+
+  async setupSettings({
+    userId,
+    settings = {}
+  }: {
+    userId: string
+    settings?: Record<string, unknown>
+  }) {
+    const resp = await this.request.post(
+      `${this.apiUrl}/api/devtools/set_settings`,
+      {
+        data: {
+          'Comfy.UseNewMenu': 'Top',
+          'Comfy.VueNodes.Enabled': false,
+          'Comfy.Graph.CanvasInfo': false,
+          'Comfy.Graph.CanvasMenu': false,
+          'Comfy.Canvas.SelectionToolbox': false,
+          'Comfy.NodeBadge.NodeIdBadgeMode': NodeBadgeMode.None,
+          'Comfy.NodeBadge.NodeSourceBadgeMode': NodeBadgeMode.None,
+          'Comfy.EnableTooltips': false,
+          'Comfy.TutorialCompleted': true,
+          [TOUR_SEEN_SETTING]: [...ENTRY_PATHS],
+          ...DEPLOY_ACTION_SEEN_SETTINGS,
+          'Comfy.Queue.MaxHistoryItems': 64,
+          'Comfy.SnapToGrid.GridSize': testComfySnapToGridGridSize,
+          'Comfy.VersionCompatibility.DisableWarnings': true,
+          'Comfy.RightSidePanel.ShowErrorsTab': false,
+          ...settings,
+          'Comfy.userId': userId
+        }
+      }
+    )
+
+    if (resp.status() !== 200) {
+      throw new Error(`Failed to setup settings: ${await resp.text()}`)
+    }
+  }
+
+  async setup({
+    clearStorage = true,
+    initialLocalStorage = {},
+    mockReleases = true,
+    url
+  }: {
+    clearStorage?: boolean
+    initialLocalStorage?: Record<string, string>
+    mockReleases?: boolean
+    url?: string
+  } = {}) {
+    // Mock release endpoint to prevent changelog popups (before navigation)
+    if (mockReleases) {
+      await this.page.route('**/releases**', async (route) => {
+        const url = route.request().url()
+        if (
+          url.includes('api.comfy.org') ||
+          url.includes('stagingapi.comfy.org')
+        ) {
+          await route.fulfill({
+            status: 200,
+            contentType: 'application/json',
+            body: JSON.stringify([])
+          })
+        } else {
+          await route.fallback()
+        }
+      })
+    }
+
+    if (clearStorage) {
+      // Navigate to a lightweight same-origin endpoint to obtain a page
+      // context for clearing storage without loading the full frontend app.
+      await this.page.goto(`${this.url}/api/users`)
+      await this.page.evaluate((id) => {
+        localStorage.clear()
+        sessionStorage.clear()
+        localStorage.setItem('Comfy.userId', id)
+      }, this.id)
+
+      for (const [k, v] of Object.entries(initialLocalStorage))
+        await this.page.localStorage.setItem(k, v)
+    }
+
+    await this.goto({ url })
+
+    await this.page.waitForFunction(() => document.fonts.ready)
+    await this.waitForAppReady()
+  }
+
+  /**
+   * Wait for the app to finish initializing after navigation/reload:
+   * `window.app.extensionManager` is present, the app loading overlay is hidden,
+   * and one animation frame has elapsed. Shared by `setup()` and
+   * `WorkflowHelper.reloadAndWaitForApp()`.
+   */
+  async waitForAppReady() {
+    const readyFuseMs = 300_000
+    try {
+      await this.page.waitForFunction(
+        // window.app => GraphCanvas ready
+        // window.app.extensionManager => GraphView ready
+        () => window.app?.extensionManager,
+        null,
+        { timeout: readyFuseMs }
+      )
+      const loadingOverlay = this.page.getByTestId(TestIds.app.loadingOverlay)
+      await loadingOverlay.waitFor({
+        state: 'attached',
+        timeout: readyFuseMs
+      })
+      await loadingOverlay.waitFor({ state: 'hidden', timeout: readyFuseMs })
+    } catch (error) {
+      const state = await this.describeUnreadyApp()
+      throw new Error(`app never became ready: ${state}`, { cause: error })
+    }
+    await this.nextFrame()
+  }
+
+  /**
+   * Why the app is not ready, in one line, for the failure message. A bare
+   * "timeout exceeded" cannot tell a stalled sign-in from a crashed boot from
+   * a backend that never answered, which is the difference between a
+   * five-minute fix and a day of guessing - so every unready-app failure
+   * carries this. Best-effort by construction: it runs on an already-failing
+   * page, so it reports what it could not read rather than throwing over it.
+   */
+  private async describeUnreadyApp(): Promise<string> {
+    try {
+      const state = await this.page.evaluate(
+        (loadingOverlayTestId) => ({
+          url: location.href,
+          title: document.title,
+          hasApp: !!window.app,
+          hasExtensionManager: !!window.app?.extensionManager,
+          loadingOverlayVisible:
+            document
+              .querySelector(`[data-testid="${loadingOverlayTestId}"]`)
+              ?.getAttribute('aria-busy') === 'true',
+          signInVisible: !!document.querySelector(
+            '[data-testid*="sign-in"], [class*="SignIn"], form[action*="signin"]'
+          ),
+          bodyText: document.body.innerText.slice(0, 300)
+        }),
+        TestIds.app.loadingOverlay
+      )
+      return (
+        `url=${state.url} title=${JSON.stringify(state.title)} ` +
+        `window.app=${state.hasApp} extensionManager=${state.hasExtensionManager} ` +
+        `loadingOverlay=${state.loadingOverlayVisible} signInView=${state.signInVisible} ` +
+        `body=${JSON.stringify(state.bodyText)}`
+      )
+    } catch (probeError) {
+      return `page state unreadable (${probeError instanceof Error ? probeError.message : String(probeError)})`
+    }
+  }
+
+  /** @deprecated Use standalone `assetPath` from `browser_tests/fixtures/utils/assetPath` directly. */
+  public assetPath(fileName: string) {
+    return assetPath(fileName)
+  }
+
+  async goto({ url }: { url?: string } = {}) {
+    await this.page.goto(url ? new URL(url, this.url).toString() : this.url)
+  }
+
+  async nextFrame() {
+    await nextFrame(this.page)
+  }
+
+  async idleFrames(count: number) {
+    for (let i = 0; i < count; i++) {
+      await this.nextFrame()
+    }
+  }
+
+  async delay(ms: number) {
+    return sleep(ms)
+  }
+
+  /**
+   * Attach a screenshot to the test report.
+   * By default, screenshots are only taken in non-CI environments.
+   * @param name - Name for the screenshot attachment
+   * @param options - Optional configuration
+   * @param options.runInCI - Whether to take screenshot in CI (default: false)
+   * @param options.fullPage - Whether to capture full page (default: false)
+   */
+  async attachScreenshot(
+    name: string,
+    options: { runInCI?: boolean; fullPage?: boolean } = {}
+  ) {
+    const { runInCI = false, fullPage = false } = options
+
+    // Skip in CI unless explicitly requested
+    if (process.env.CI && !runInCI) {
+      return
+    }
+
+    const testInfo = comfyPageFixture.info()
+    await testInfo.attach(name, {
+      body: await this.page.screenshot({ fullPage }),
+      contentType: 'image/png'
+    })
+  }
+
+  async closeMenu() {
+    await this.page.locator('button.comfy-close-menu-btn').click()
+    await this.nextFrame()
+  }
+
+  async clickDialogButton(prompt: string, buttonText: string = 'Yes') {
+    const modal = this.page.locator(
+      `.comfy-modal-content:has-text("${prompt}")`
+    )
+    await modal.waitFor({ state: 'visible' })
+    await modal
+      .locator('.comfyui-button', {
+        hasText: buttonText
+      })
+      .click()
+    await modal.waitFor({ state: 'hidden' })
+  }
+
+  get domWidgets(): Locator {
+    return this.page.locator('.dom-widget')
+  }
+
+  async expectScreenshot(
+    locator: Locator,
+    name: string | string[],
+    options?: {
+      animations?: 'disabled' | 'allow'
+      caret?: 'hide' | 'initial'
+      mask?: Array<Locator>
+      maskColor?: string
+      maxDiffPixelRatio?: number
+      maxDiffPixels?: number
+      omitBackground?: boolean
+      scale?: 'css' | 'device'
+      stylePath?: string | Array<string>
+      threshold?: number
+      timeout?: number
+    }
+  ): Promise<void> {
+    await this.nextFrame()
+    await comfyExpect(locator).toHaveScreenshot(name, options)
+  }
+
+  async setFocusMode(focusMode: boolean) {
+    await this.page.evaluate((focusMode) => {
+      ;(window.app!.extensionManager as WorkspaceStore).focusMode = focusMode
+    }, focusMode)
+    await this.nextFrame()
+  }
+}
+
+class ComfyFiles {
+  protected teardownCallbacks: (() => Promise<unknown>)[] = []
+
+  constructor(protected readonly comfyPage: ComfyPage) {}
+
+  async teardown() {
+    await Promise.all(this.teardownCallbacks.map((cb) => cb()))
+  }
+
+  deleteAfterTest(file: {
+    filename: string
+    subfolder?: string
+    type?: string
+  }) {
+    this.teardownCallbacks.push(() =>
+      this.comfyPage.request.delete(
+        `${this.comfyPage.url}/api/devtools/view?${new URLSearchParams(file)}`
+      )
+    )
+  }
+}
+
+export const testComfySnapToGridGridSize = 50
+
+const COLLECT_COVERAGE = process.env.COLLECT_COVERAGE === 'true'
+
+export const comfyPageFixture = base.extend<{
+  initialFeatureFlags: Record<string, unknown>
+  initialLocalStorage: Record<string, string>
+  initialSettings: Record<string, unknown>
+  initialUrl: string | undefined
+  mockReleases: boolean
+  firebaseLogin: boolean
+  comfyPage: ComfyPage
+  comfyMouse: ComfyMouse
+  comfyFiles: ComfyFiles
+}>({
+  // Allows configuring feature flags for tests with before initial setup:
+  // `test.use({ initialFeatureFlags: { my_flag: true } })`.
+  initialFeatureFlags: [{}, { option: true }],
+
+  initialLocalStorage: [{}, { option: true }],
+  // Allows seeding user settings before initial page load:
+  // `test.use({ initialSettings: { 'Comfy.Locale': 'zh' } })`. Merged on top of
+  // the fixture's defaults so per-test values win.
+  initialSettings: [{}, { option: true }],
+  initialUrl: [undefined, { option: true }],
+  mockReleases: [true, { option: true }],
+  // Set `false` to open a cloud tab that holds no Firebase login.
+  firebaseLogin: [true, { option: true }],
+
+  page: async ({ page, browserName }, use) => {
+    if (browserName !== 'chromium' || !COLLECT_COVERAGE) {
+      return use(page)
+    }
+
+    await page.coverage.startJSCoverage({ resetOnNavigation: false })
+    await use(page)
+    // A closed page has no coverage to collect
+    if (page.isClosed()) return
+    const coverage = await page.coverage.stopJSCoverage()
+
+    const mcr = MCR({
+      outputDir: COVERAGE_OUTPUT_DIR,
+      reports: []
+    })
+    await mcr.add(coverage)
+  },
+
+  comfyPage: async (
+    {
+      page,
+      request,
+      initialFeatureFlags,
+      initialLocalStorage,
+      initialSettings,
+      initialUrl,
+      mockReleases,
+      firebaseLogin
+    },
+    use,
+    testInfo
+  ) => {
+    const comfyPage = new ComfyPage(page, request)
+
+    const { parallelIndex } = testInfo
+    const username = `playwright-test-${parallelIndex}`
+    const isCustomNodes = testInfo.project.name === 'custom-nodes'
+    const needsPerf =
+      testInfo.tags.includes('@perf') || testInfo.tags.includes('@audit')
+    const startupErrorCollector = isCustomNodes
+      ? collectConsoleErrors(page)
+      : undefined
+    let perfStarted = false
+    const cleanups: (() => Promise<void>)[] = []
+    if (needsPerf)
+      cleanups.push(async () => {
+        if (perfStarted) await comfyPage.perf.dispose()
+      })
+    if (startupErrorCollector)
+      cleanups.push(async () => startupErrorCollector.stop())
+
+    const run = async () => {
+      const userId = await comfyPage.setupUser(username)
+      comfyPage.userIds[parallelIndex] = userId
+
+      const isVueNodes = testInfo.tags.includes('@vue-nodes')
+      comfyPage.isVueNodes = isVueNodes
+
+      await comfyPage.setupSettings({
+        userId,
+        settings: {
+          ...(isVueNodes && { 'Comfy.VueNodes.Enabled': true }),
+          ...initialSettings
+        }
+      })
+      if (testInfo.tags.includes('@cloud')) {
+        const context = page.context()
+        await context.route('**/api/auth/session', (route) =>
+          route.fulfill({ status: 204 })
+        )
+        await context.route('**/api/billing/status', (route) =>
+          route.fulfill({ json: LEGACY_PERSONAL_BILLING_STATUS })
+        )
+        await context.route('**/api/billing/capabilities', (route) =>
+          route.fulfill({ json: createBillingCapabilities('ws-personal') })
+        )
+        await context.route('**/api/billing/balance', (route) =>
+          route.fulfill({ json: EMPTY_BILLING_BALANCE })
+        )
+        await context.route('**/api/billing/plans', (route) =>
+          route.fulfill({ json: EMPTY_BILLING_PLANS })
+        )
+        await context.route('**/customers/cloud-subscription-status', (route) =>
+          route.fulfill({ json: UNSUBSCRIBED })
+        )
+        await context.route('**/customers/balance', (route) =>
+          route.fulfill({ json: ZERO_BALANCE })
+        )
+        await mockWorkspace(context, workspace('personal', 'owner'), [])
+      }
+      if (testInfo.tags.includes('@cloud') || testInfo.tags.includes('@auth')) {
+        if (firebaseLogin) await comfyPage.cloudAuth.mockAuth()
+        else await comfyPage.cloudAuth.mockFirebaseEndpoints()
+      }
+
+      if (isCustomNodes) await installCustomNodeBlankStartup(page)
+      if (isCustomNodes) await trackVisibleErrors(page)
+
+      if (Object.keys(initialFeatureFlags).length > 0) {
+        await comfyPage.featureFlags.seedFlags(initialFeatureFlags)
+      }
+
+      await comfyPage.setup({
+        initialLocalStorage,
+        url: initialUrl,
+        mockReleases
+      })
+
+      if (startupErrorCollector) {
+        startupErrorCollector.stop()
+        recordStartupConsoleErrors(page, startupErrorCollector.errors)
+      }
+
+      if (isCustomNodes) {
+        await comfyExpect
+          .poll(() => comfyPage.nodeOps.getGraphNodesCount())
+          .toBe(0)
+      }
+
+      if (testInfo.tags.includes('@cloud')) {
+        await comfyPage.featureFlags.setServerFlagsPersistent({
+          asset_deletion_enabled: true
+        })
+      }
+
+      if (isVueNodes) {
+        await comfyPage.vueNodes.waitForNodes()
+      }
+
+      if (needsPerf) {
+        await comfyPage.perf.init()
+        perfStarted = true
+      }
+
+      await use(comfyPage)
+    }
+    await runWithCollectedCleanup(run, cleanups)
+  },
+  comfyMouse: async ({ comfyPage }, use) => {
+    const comfyMouse = new ComfyMouse(comfyPage)
+    await use(comfyMouse)
+  },
+  comfyFiles: async ({ comfyPage }, use) => {
+    const comfyFiles = new ComfyFiles(comfyPage)
+    await use(comfyFiles)
+    await comfyFiles.teardown()
+  }
+})
+
+export { comfyExpect }

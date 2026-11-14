@@ -1,0 +1,584 @@
+import type { ComfyPage } from '@e2e/fixtures/ComfyPage'
+import type { WorkspaceStore } from '@e2e/types/globals'
+import {
+  comfyExpect as expect,
+  comfyPageFixture as test
+} from '@e2e/fixtures/ComfyPage'
+import { DefaultGraphPositions } from '@e2e/fixtures/constants/defaultGraphPositions'
+import { TestIds } from '@e2e/fixtures/selectors'
+import { fitToViewInstant } from '@e2e/fixtures/utils/fitToView'
+
+type ChangeTrackerDebugState = {
+  changeCount: number
+  graphMatchesActiveState: boolean
+  isLoadingGraph: boolean
+  isModified: boolean | undefined
+  redoQueueSize: number
+  restoringState: boolean
+  undoQueueSize: number
+}
+
+async function getChangeTrackerDebugState(comfyPage: ComfyPage) {
+  return await comfyPage.page.evaluate(() => {
+    type ChangeTrackerClassLike = {
+      graphEqual: (left: unknown, right: unknown) => boolean
+      isLoadingGraph: boolean
+    }
+
+    type ChangeTrackerLike = {
+      _restoringState: boolean
+      activeState: unknown
+      changeCount: number
+      constructor: ChangeTrackerClassLike
+      redoQueue: unknown[]
+      undoQueue: unknown[]
+    }
+
+    type ActiveWorkflowLike = {
+      changeTracker?: ChangeTrackerLike
+      isModified?: boolean
+    }
+
+    const workflowStore = window.app!.extensionManager as WorkspaceStore
+    const workflow = workflowStore.workflow
+      .activeWorkflow as ActiveWorkflowLike | null
+    const tracker = workflow?.changeTracker
+    if (!workflow || !tracker) {
+      throw new Error('Active workflow change tracker is not available')
+    }
+
+    const currentState = JSON.parse(
+      JSON.stringify(window.app!.rootGraph.serialize())
+    )
+    return {
+      changeCount: tracker.changeCount,
+      graphMatchesActiveState: tracker.constructor.graphEqual(
+        tracker.activeState,
+        currentState
+      ),
+      isLoadingGraph: tracker.constructor.isLoadingGraph,
+      isModified: workflow.isModified,
+      redoQueueSize: tracker.redoQueue.length,
+      restoringState: tracker._restoringState,
+      undoQueueSize: tracker.undoQueue.length
+    } satisfies ChangeTrackerDebugState
+  })
+}
+
+async function waitForChangeTrackerSettled(
+  comfyPage: ComfyPage,
+  expected: Pick<
+    ChangeTrackerDebugState,
+    'isModified' | 'redoQueueSize' | 'undoQueueSize'
+  >
+) {
+  // Visible node flags can flip before undo finishes loadGraphData() and
+  // updates the tracker. Poll the tracker's own settled state so we do not
+  // start the next transaction while captureCanvasState() is still gated.
+  await expect
+    .poll(() => getChangeTrackerDebugState(comfyPage))
+    .toMatchObject({
+      changeCount: 0,
+      graphMatchesActiveState: true,
+      isLoadingGraph: false,
+      restoringState: false,
+      ...expected
+    })
+}
+
+async function beforeChange(comfyPage: ComfyPage) {
+  await comfyPage.page.evaluate(() => {
+    window.app!.canvas.emitBeforeChange()
+  })
+}
+
+async function afterChange(comfyPage: ComfyPage) {
+  await comfyPage.page.evaluate(() => {
+    window.app!.canvas.emitAfterChange()
+  })
+}
+
+test.use({ initialSettings: { 'Comfy.UseNewMenu': 'Disabled' } })
+
+test.describe('Change Tracker', { tag: '@workflow' }, () => {
+  test.describe('Undo/Redo', () => {
+    test.use({ initialSettings: { 'Comfy.UseNewMenu': 'Top' } })
+
+    test.beforeEach(async ({ comfyPage }) => {
+      await comfyPage.workflow.setupWorkflowsDirectory({})
+    })
+
+    test('Can undo multiple operations', async ({ comfyPage }) => {
+      await expect.poll(() => comfyPage.workflow.getUndoQueueSize()).toBe(0)
+      await expect.poll(() => comfyPage.workflow.getRedoQueueSize()).toBe(0)
+
+      // Save, confirm no errors & workflow modified flag removed
+      await comfyPage.menu.topbar.saveWorkflow('undo-redo-test')
+      await expect(comfyPage.toast.toastErrors).toHaveCount(0)
+      await expect
+        .poll(() => comfyPage.workflow.isCurrentWorkflowModified())
+        .toBe(false)
+      await expect.poll(() => comfyPage.workflow.getUndoQueueSize()).toBe(0)
+      await expect.poll(() => comfyPage.workflow.getRedoQueueSize()).toBe(0)
+
+      const node = (await comfyPage.nodeOps.getFirstNodeRef())!
+      await node.click('title')
+      await node.click('collapse')
+      await expect(node).toBeCollapsed()
+      await expect
+        .poll(() => comfyPage.workflow.isCurrentWorkflowModified())
+        .toBe(true)
+      await expect.poll(() => comfyPage.workflow.getUndoQueueSize()).toBe(1)
+      await expect.poll(() => comfyPage.workflow.getRedoQueueSize()).toBe(0)
+
+      await comfyPage.keyboard.bypass()
+      await expect(node).toBeBypassed()
+      await expect
+        .poll(() => comfyPage.workflow.isCurrentWorkflowModified())
+        .toBe(true)
+      await expect.poll(() => comfyPage.workflow.getUndoQueueSize()).toBe(2)
+      await expect.poll(() => comfyPage.workflow.getRedoQueueSize()).toBe(0)
+
+      await comfyPage.keyboard.undo()
+      await expect(node).not.toBeBypassed()
+      await waitForChangeTrackerSettled(comfyPage, {
+        isModified: true,
+        redoQueueSize: 1,
+        undoQueueSize: 1
+      })
+
+      await comfyPage.keyboard.undo()
+      await expect(node).not.toBeCollapsed()
+      await waitForChangeTrackerSettled(comfyPage, {
+        isModified: false,
+        redoQueueSize: 2,
+        undoQueueSize: 0
+      })
+    })
+  })
+
+  test('A multi-operation chain survives undo-all then redo-all', async ({
+    comfyPage
+  }) => {
+    const snapshot = () =>
+      comfyPage.page.evaluate(() => {
+        const graph = window.app!.canvas.graph!
+        return {
+          nodes: graph.nodes
+            .map((node) => ({
+              id: String(node.id),
+              pos: [...node.pos],
+              type: node.type
+            }))
+            .sort((left, right) => left.id.localeCompare(right.id)),
+          links: [...graph.links.values()]
+            .map((link) =>
+              [
+                String(link.origin_id),
+                link.origin_slot,
+                String(link.target_id),
+                link.target_slot
+              ].join(':')
+            )
+            .sort()
+        }
+      })
+
+    await expect.poll(() => comfyPage.workflow.getUndoQueueSize()).toBe(0)
+    const before = await snapshot()
+
+    const source = await comfyPage.nodeOps.addNode('EmptyImage', undefined, {
+      x: 120,
+      y: 460
+    })
+    const target = await comfyPage.nodeOps.addNode(
+      'ImageCompositeMasked',
+      undefined,
+      { x: 620, y: 460 }
+    )
+    await comfyPage.nextFrame()
+
+    const destinationIndex = await comfyPage.page.evaluate((id) => {
+      const node = window.app!.canvas.graph!.getNodeById(id)!
+      return node.inputs.findIndex((input) => input.name === 'destination')
+    }, target.id)
+    expect(
+      destinationIndex,
+      'ImageCompositeMasked should expose a destination input'
+    ).toBeGreaterThanOrEqual(0)
+
+    await source.connectOutput(0, target, destinationIndex)
+    await source.dragBy({ x: 40, y: 70 })
+    await target.dragBy({ x: -30, y: 45 })
+
+    // Delete through the UI. `graph.remove()` from `page.evaluate` mutates the
+    // graph without the change tracker ever capturing it, so `activeState`
+    // never catches up: `graphMatchesActiveState` stays false forever and the
+    // deletion is missing from the history the loops below walk.
+    const nodeCountBeforeDelete = await comfyPage.nodeOps.getNodeCount()
+    await source.click('title')
+    await comfyPage.page.keyboard.press('Delete')
+    await expect
+      .poll(() => comfyPage.nodeOps.getNodeCount())
+      .toBe(nodeCountBeforeDelete - 1)
+
+    // Sampling `depth` before the tracker has settled returns a short count, and
+    // the first undo then fires into a pending capture and is swallowed —
+    // exactly how this failed on CI (undo=2/redo=0 where 1/1 was expected).
+    //
+    // `graphMatchesActiveState` is deliberately NOT the gate. It was observed
+    // to stay false indefinitely after a node deletion: `removeNode()` captures
+    // inside its own `afterChange()`, then runs `updateExecutionOrder()`, which
+    // rewrites serialized node order after the capture. The undo queue settling
+    // is the signal that matters here, and the per-step sizes below are direct
+    // evidence that each press landed.
+    await expect
+      .poll(() => getChangeTrackerDebugState(comfyPage))
+      .toMatchObject({
+        changeCount: 0,
+        isLoadingGraph: false,
+        restoringState: false
+      })
+
+    // Read the depth rather than assuming one entry per operation. How finely
+    // the tracker checkpoints is not what this row is about, and asserting a
+    // count here would turn a round-trip test into a probe of the transaction
+    // model.
+    let previousDepth = -1
+    await expect
+      .poll(async () => {
+        const current = (await comfyPage.workflow.getUndoQueueSize()) ?? 0
+        const stable = current > 1 && current === previousDepth
+        previousDepth = current
+        return stable
+      })
+      .toBe(true)
+    const depth = previousDepth
+
+    const after = await snapshot()
+    expect(after, 'the chain must actually have changed the graph').not.toEqual(
+      before
+    )
+
+    // Settle on the queue sizes only. `waitForChangeTrackerSettled` also pins
+    // `isModified`, which depends on a saved baseline this describe does not
+    // establish — and which is not what this row is about.
+    const waitForQueues = async (
+      undoQueueSize: number,
+      redoQueueSize: number
+    ) => {
+      await expect
+        .poll(() => getChangeTrackerDebugState(comfyPage))
+        .toMatchObject({
+          changeCount: 0,
+          isLoadingGraph: false,
+          redoQueueSize,
+          restoringState: false,
+          undoQueueSize
+        })
+    }
+
+    for (let step = 0; step < depth; step++) {
+      await comfyPage.keyboard.undo(null)
+      await waitForQueues(depth - step - 1, step + 1)
+    }
+    expect(await snapshot()).toEqual(before)
+
+    for (let step = 0; step < depth; step++) {
+      await comfyPage.page.keyboard.press('ControlOrMeta+Shift+z')
+      await waitForQueues(step + 1, depth - step - 1)
+    }
+    expect(await snapshot()).toEqual(after)
+  })
+
+  test('Can group multiple change actions into a single transaction', async ({
+    comfyPage
+  }) => {
+    const node = (await comfyPage.nodeOps.getFirstNodeRef())!
+    expect(node).toBeTruthy()
+    await expect(node).not.toBeCollapsed()
+    await expect(node).not.toBeBypassed()
+
+    // Make changes outside set
+    // Bypass + collapse node
+    await node.click('title')
+    await node.click('collapse')
+    await comfyPage.keyboard.bypass()
+    await expect(node).toBeCollapsed()
+    await expect(node).toBeBypassed()
+
+    // Undo, undo, ensure both changes undone
+    await comfyPage.keyboard.undo()
+    await expect(node).not.toBeBypassed()
+    await expect(node).toBeCollapsed()
+    await comfyPage.keyboard.undo()
+    await expect(node).not.toBeBypassed()
+    await expect(node).not.toBeCollapsed()
+    await waitForChangeTrackerSettled(comfyPage, {
+      isModified: false,
+      redoQueueSize: 2,
+      undoQueueSize: 0
+    })
+
+    // Prevent clicks registering a double-click
+    await comfyPage.canvasOps.clickEmptySpace()
+    await node.click('title')
+
+    // Run again, but within a change transaction
+    await beforeChange(comfyPage)
+
+    await node.click('collapse')
+    await comfyPage.keyboard.bypass()
+    await expect(node).toBeCollapsed()
+    await expect(node).toBeBypassed()
+
+    // End transaction
+    await afterChange(comfyPage)
+    await waitForChangeTrackerSettled(comfyPage, {
+      isModified: true,
+      redoQueueSize: 0,
+      undoQueueSize: 1
+    })
+
+    // Ensure undo reverts both changes
+    await comfyPage.keyboard.undo()
+    await expect(node).not.toBeBypassed()
+    await expect(node).not.toBeCollapsed()
+    await waitForChangeTrackerSettled(comfyPage, {
+      isModified: false,
+      redoQueueSize: 1,
+      undoQueueSize: 0
+    })
+  })
+
+  test('Can nest multiple change transactions without adding undo steps', async ({
+    comfyPage
+  }) => {
+    const node = (await comfyPage.nodeOps.getFirstNodeRef())!
+    const bypassAndPin = async () => {
+      await beforeChange(comfyPage)
+      await comfyPage.keyboard.bypass()
+      await expect(node).toBeBypassed()
+      await comfyPage.keyboard.press('KeyP')
+      await expect(node).toBePinned()
+      await afterChange(comfyPage)
+    }
+
+    const collapse = async () => {
+      await beforeChange(comfyPage)
+      await node.click('collapse', { moveMouseToEmptyArea: true })
+      await expect(node).toBeCollapsed()
+      await afterChange(comfyPage)
+    }
+
+    const multipleChanges = async () => {
+      await beforeChange(comfyPage)
+      // Call other actions that uses begin/endChange
+      await node.click('title')
+      await collapse()
+      await bypassAndPin()
+      await afterChange(comfyPage)
+    }
+
+    await multipleChanges()
+
+    await comfyPage.keyboard.undo()
+    await expect(node).not.toBeBypassed()
+    await expect(node).not.toBePinned()
+    await expect(node).not.toBeCollapsed()
+
+    await comfyPage.keyboard.redo()
+    await expect(node).toBeBypassed()
+    await expect(node).toBePinned()
+    await expect(node).toBeCollapsed()
+  })
+
+  test('Can detect changes in workflow.extra', async ({ comfyPage }) => {
+    await expect.poll(() => comfyPage.workflow.getUndoQueueSize()).toBe(0)
+    await comfyPage.page.evaluate(() => {
+      window.app!.graph.extra.foo = 'bar'
+    })
+    // Click empty space to trigger a change detection.
+    await comfyPage.canvasOps.clickEmptySpace()
+    await expect.poll(() => comfyPage.workflow.getUndoQueueSize()).toBe(1)
+  })
+
+  test('Ignores changes in workflow.ds', async ({ comfyPage }) => {
+    await expect.poll(() => comfyPage.workflow.getUndoQueueSize()).toBe(0)
+    await comfyPage.canvasOps.pan({ x: 10, y: 10 })
+    await expect.poll(() => comfyPage.workflow.getUndoQueueSize()).toBe(0)
+  })
+
+  test('Undo preserves viewport offset', async ({ comfyPage }) => {
+    // Pan to a distinct offset so we can detect drift
+    await comfyPage.canvasOps.pan({ x: 200, y: 150 })
+
+    const viewportBefore = await comfyPage.page.evaluate(() => {
+      const ds = window.app!.canvas.ds
+      return { scale: ds.scale, offset: [...ds.offset] }
+    })
+
+    // Make a graph change so we have something to undo
+    const node = (await comfyPage.nodeOps.getFirstNodeRef())!
+    await node.click('title')
+    await node.click('collapse')
+    await expect(node).toBeCollapsed()
+    await expect.poll(() => comfyPage.workflow.getUndoQueueSize()).toBe(1)
+
+    // Undo the collapse — viewport should be preserved
+    await comfyPage.keyboard.undo()
+    await expect(node).not.toBeCollapsed()
+
+    await expect
+      .poll(
+        () =>
+          comfyPage.page.evaluate(() => {
+            const ds = window.app!.canvas.ds
+            return { scale: ds.scale, offset: [...ds.offset] }
+          }),
+        { timeout: 2_000 }
+      )
+      .toEqual({
+        scale: expect.closeTo(viewportBefore.scale, 2),
+        offset: [
+          expect.closeTo(viewportBefore.offset[0], 0),
+          expect.closeTo(viewportBefore.offset[1], 0)
+        ]
+      })
+  })
+
+  test(
+    'Undo after a redo and a canvas click removes the redone link',
+    { tag: '@vue-nodes' },
+    async ({ comfyPage }) => {
+      await comfyPage.workflow.loadWorkflow('vueNodes/simple-triple')
+      await fitToViewInstant(comfyPage)
+      const samplerNode = await comfyPage.nodeOps.getNodeRefByType('KSampler')
+      const vaeNode = await comfyPage.nodeOps.getNodeRefByType('VAEDecode')
+      const vaeInput = await vaeNode.getInput(0)
+
+      await comfyPage.vueNodes
+        .getOutputSlotConnectionDot(String(samplerNode.id), 0)
+        .dragTo(
+          comfyPage.vueNodes.getInputSlotConnectionDot(String(vaeNode.id), 0)
+        )
+      await vaeInput.expectLinkCount(1)
+      await comfyPage.canvasOps.clickEmptySpace()
+      await expect.poll(() => comfyPage.workflow.getUndoQueueSize()).toBe(1)
+
+      await comfyPage.keyboard.undo()
+      await vaeInput.expectLinkCount(0)
+      await comfyPage.keyboard.redo()
+      await vaeInput.expectLinkCount(1)
+      await expect
+        .poll(() => getChangeTrackerDebugState(comfyPage))
+        .toMatchObject({
+          isLoadingGraph: false,
+          redoQueueSize: 0,
+          restoringState: false,
+          undoQueueSize: 1
+        })
+
+      await comfyPage.canvas.click({
+        position: DefaultGraphPositions.emptyCanvasClick
+      })
+      await comfyPage.keyboard.undo()
+
+      await vaeInput.expectLinkCount(0)
+    }
+  )
+
+  test(
+    'Tracks convert to subgraph as undo step',
+    { tag: ['@vue-nodes', '@subgraph'] },
+    async ({ comfyPage }) => {
+      await comfyPage.settings.setSetting('Comfy.Canvas.SelectionToolbox', true)
+
+      const node = await comfyPage.vueNodes.getFixtureByTitle('Empty Latent')
+      const width = comfyPage.vueNodes.getWidgetByName('Empty Latent', 'width')
+      const { input } = comfyPage.vueNodes.getInputNumberControls(width)
+
+      await input.fill('40')
+      await node.title.click()
+      await comfyPage.page
+        .getByTestId(TestIds.selectionToolbox.convertSubgraph)
+        .click()
+      await expect(input).toBeHidden()
+
+      await comfyPage.keyboard.undo()
+      await expect(input).toHaveValue('40')
+      await comfyPage.keyboard.undo()
+      await expect(input).toHaveValue('512')
+    }
+  )
+
+  test(
+    'Does not restore invalid navigation stack',
+    { tag: ['@vue-nodes', '@subgraph'] },
+    async ({ comfyPage }) => {
+      const convertToSubgraph = async (nodeTitle: string) => {
+        const { undoQueueSize } = await getChangeTrackerDebugState(comfyPage)
+
+        await comfyPage.contextMenu
+          .openFor(comfyPage.vueNodes.getNodeByTitle(nodeTitle))
+          .then((menu) => menu.clickMenuItem('Convert to Subgraph'))
+
+        await expect
+          .poll(async () => {
+            const state = await getChangeTrackerDebugState(comfyPage)
+            return {
+              graphMatchesActiveState: state.graphMatchesActiveState,
+              undoQueueAdvanced: state.undoQueueSize > undoQueueSize
+            }
+          })
+          .toEqual({
+            graphMatchesActiveState: true,
+            undoQueueAdvanced: true
+          })
+      }
+
+      const undoAndWait = () =>
+        comfyPage.page.evaluate(async () => {
+          const workspaceStore = window.app!.extensionManager as WorkspaceStore
+          const tracker = workspaceStore.workflow.activeWorkflow?.changeTracker
+          if (!tracker) {
+            throw new Error('Active workflow change tracker is not available')
+          }
+
+          await tracker.undo()
+        })
+
+      await test.step('setup nested subgraph', async () => {
+        await convertToSubgraph('Load Checkpoint')
+        await convertToSubgraph('New Subgraph')
+        await comfyPage.vueNodes.enterSubgraph()
+      })
+
+      await test.step('deeply nested subgraphs', async () => {
+        await convertToSubgraph('New Subgraph')
+        const intermediateGraphId = await comfyPage.subgraph.getActiveGraphId()
+        await comfyPage.vueNodes.enterSubgraph()
+        await expect
+          .poll(() => comfyPage.subgraph.getActiveGraphId())
+          .not.toBe(intermediateGraphId)
+
+        await undoAndWait()
+        await expect
+          .poll(
+            () => comfyPage.subgraph.getActiveGraphId(),
+            'undo from deeply nested subgraph resolves immediate valid parent'
+          )
+          .toBe(intermediateGraphId)
+      })
+
+      await undoAndWait()
+      await undoAndWait()
+      await expect
+        .poll(
+          () => comfyPage.subgraph.isInSubgraph(),
+          'Currently bugged: click after subgraph requires additional undo'
+        )
+        .toBe(false)
+    }
+  )
+})

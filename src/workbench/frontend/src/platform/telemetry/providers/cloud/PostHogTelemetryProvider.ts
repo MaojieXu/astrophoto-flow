@@ -1,0 +1,970 @@
+import {
+  CHECKOUT_JOURNEY_EVENT_NAME_BY_PHASE,
+  getBillingTelemetryEventName,
+  getCheckoutJourneyTelemetryEventName,
+  getCloudAppBillingTelemetryEventPayload,
+  getCloudAppCheckoutJourneyTelemetryEventPayload
+} from '@comfyorg/account-core/billing'
+import type {
+  BillingTelemetryEvent,
+  CheckoutJourneyTelemetryEvent
+} from '@comfyorg/account-core/billing'
+import type {
+  SsoTelemetryEvent,
+  WebSessionTelemetryEvent
+} from '@comfyorg/account-core/telemetry'
+import type { CaptureResult, PostHog } from 'posthog-js'
+import { watch } from 'vue'
+import type { WatchStopHandle } from 'vue'
+
+import { createPostHogBeforeSend } from '@comfyorg/shared-frontend-utils/piiUtil'
+import {
+  COMFY_POSTHOG_OPTIONS,
+  DEFAULT_POSTHOG_API_HOST
+} from '@comfyorg/shared-frontend-utils/telemetry'
+
+import { useCurrentUser } from '@/composables/auth/useCurrentUser'
+import { useBillingContext } from '@/composables/billing/useBillingContext'
+import { remoteConfig } from '@/platform/remoteConfig/remoteConfig'
+import { whenStoresReady } from '@/platform/telemetry/storeReadiness'
+import type { RemoteConfig } from '@/platform/remoteConfig/types'
+import { getAgentPanelOpen } from '@/platform/telemetry/utils/getAgentPanelOpen'
+import { getExecutionContext } from '@/platform/telemetry/utils/getExecutionContext'
+
+import type {
+  AddCreditsClickMetadata,
+  AgentAttachButtonClickedMetadata,
+  AgentConsentNotOfferedMetadata,
+  AgentConsentOfferExitedMetadata,
+  AgentConsentResolvedMetadata,
+  AgentConsentShownMetadata,
+  AgentCreditTransitionNoticeMetadata,
+  AgentEntryButtonClickedMetadata,
+  AgentErrorMetadata,
+  AgentFreeUseExposureMetadata,
+  AgentFreeUseNoticeMetadata,
+  AgentGraphProjectionMetadata,
+  AgentPaywallCtaMetadata,
+  AgentPaywallShownMetadata,
+  AgentMessageSentMetadata,
+  AgentMessageFeedbackMetadata,
+  AgentNodeTaggedMetadata,
+  AgentOnboardingNotShownMetadata,
+  AgentOnboardingStepMetadata,
+  AgentPanelClosedMetadata,
+  AgentPanelOpenedMetadata,
+  AgentRunApprovalResolvedMetadata,
+  AgentRunApprovalShownMetadata,
+  AgentRunModeChangedMetadata,
+  AgentStarterPromptClickedMetadata,
+  AgentStarterPromptExposureMetadata,
+  AgentStopClickedMetadata,
+  AgentThreadStartedMetadata,
+  AgentWorkflowBoundMetadata,
+  AgentWorkflowAppliedMetadata,
+  AuthErrorMetadata,
+  AuthMetadata,
+  ImageLoadFailureMetadata,
+  UnifiedAuthRefreshMetadata,
+  UnifiedAuthRetryMetadata,
+  BeginCheckoutMetadata,
+  BootstrapCompleteMetadata,
+  DefaultViewSetMetadata,
+  EnterLinearMetadata,
+  ExecutionErrorMetadata,
+  ExecutionSuccessMetadata,
+  ExecutionTriggerSource,
+  ShareFlowMetadata,
+  ShareLinkOpenedMetadata,
+  HelpCenterClosedMetadata,
+  HelpCenterOpenedMetadata,
+  HelpResourceClickedMetadata,
+  InAppSurveyEvent,
+  InAppSurveyStage,
+  LinkDedupDropMetadata,
+  NamedValuesShadowDiffMismatchMetadata,
+  NamedValuesShadowDiffSummaryMetadata,
+  NodeAddedMetadata,
+  NodeSearchMetadata,
+  NodeSearchResultMetadata,
+  OnboardingTourMetadata,
+  OnboardingTourStage,
+  SearchQueryMetadata,
+  PageViewMetadata,
+  PageVisibilityMetadata,
+  ResubscribeClickMetadata,
+  RunButtonProperties,
+  SettingChangedMetadata,
+  SharedWorkflowRunMetadata,
+  ShellLayoutMetadata,
+  SubscriptionCancellationMetadata,
+  SubscriptionMetadata,
+  SubscriptionSuccessMetadata,
+  SurveyResponses,
+  TabCountMetadata,
+  TelemetryEventName,
+  TelemetryEventProperties,
+  TelemetryProvider,
+  TemplateFilterMetadata,
+  TemplateLibraryClosedMetadata,
+  TemplateLibraryMetadata,
+  TemplateMetadata,
+  UiButtonClickMetadata,
+  WidgetFavoriteToggledMetadata,
+  WorkflowCreatedMetadata,
+  WorkflowImportMetadata,
+  WorkflowSavedMetadata,
+  WorkspaceInviteFailedMetadata,
+  WorkspaceInviteMetadata
+} from '../../types'
+import {
+  CANCELLATION_STAGE_EVENTS,
+  OnboardingTourEvents,
+  TelemetryEvents
+} from '../../types'
+import { normalizeSurveyResponses } from '../../utils/surveyNormalization'
+
+const EXECUTION_EVENT_SOURCE = 'web-sdk'
+
+const IN_APP_SURVEY_EVENTS: Record<InAppSurveyStage, TelemetryEventName> = {
+  shown: TelemetryEvents.IN_APP_SURVEY_SHOWN,
+  sent: TelemetryEvents.IN_APP_SURVEY_SENT,
+  dismissed: TelemetryEvents.IN_APP_SURVEY_DISMISSED
+}
+
+const DEFAULT_DISABLED_EVENTS = [
+  TelemetryEvents.WORKFLOW_OPENED,
+  TelemetryEvents.PAGE_VISIBILITY_CHANGED,
+  TelemetryEvents.TAB_COUNT_TRACKING,
+  TelemetryEvents.NODE_SEARCH,
+  TelemetryEvents.NODE_SEARCH_RESULT_SELECTED,
+  TelemetryEvents.HELP_CENTER_OPENED,
+  TelemetryEvents.HELP_RESOURCE_CLICKED,
+  TelemetryEvents.HELP_CENTER_CLOSED,
+  TelemetryEvents.WORKFLOW_CREATED
+] as const satisfies TelemetryEventName[]
+
+const TELEMETRY_EVENT_SET = new Set<string>([
+  ...Object.values(TelemetryEvents),
+  ...Object.values(CHECKOUT_JOURNEY_EVENT_NAME_BY_PHASE)
+])
+
+interface QueuedEvent {
+  eventName: TelemetryEventName
+  properties?: TelemetryEventProperties
+}
+
+interface DesktopEntryProps {
+  source_app: 'desktop'
+  desktop_device_id?: string
+}
+
+interface DesktopEntryAttribution {
+  props: DesktopEntryProps
+  source: 'url' | 'persisted'
+}
+
+function stampPlatformAxes(event: CaptureResult | null): CaptureResult | null {
+  if (!event) return null
+  event.properties.client = window.__comfyDesktop2 ? 'desktop' : 'web'
+  event.properties.deployment = 'cloud'
+  return event
+}
+
+function readDesktopEntryAttribution(
+  posthog: PostHog
+): DesktopEntryAttribution | null {
+  const params = new URLSearchParams(window.location.search)
+  const isDesktopEntry = params.get('utm_source') === 'comfy.desktop'
+  if (!isDesktopEntry && posthog.get_property('source_app') !== 'desktop') {
+    return null
+  }
+  const deviceId: unknown = isDesktopEntry
+    ? params.get('desktop_device_id')
+    : posthog.get_property('desktop_device_id')
+  const props: DesktopEntryProps =
+    typeof deviceId === 'string' && deviceId
+      ? { source_app: 'desktop', desktop_device_id: deviceId }
+      : { source_app: 'desktop' }
+  return { props, source: isDesktopEntry ? 'url' : 'persisted' }
+}
+
+/**
+ * PostHog Telemetry Provider - Cloud Build Implementation
+ *
+ * Sends all telemetry events to PostHog so they can be correlated
+ * with session recordings. Follows the same pattern as MixpanelTelemetryProvider.
+ *
+ * CRITICAL: OSS Build Safety
+ * Entire file is tree-shaken away in OSS builds (DISTRIBUTION unset).
+ */
+export class PostHogTelemetryProvider implements TelemetryProvider {
+  private isEnabled = true
+  private posthog: PostHog | null = null
+  private eventQueue: QueuedEvent[] = []
+  private pendingFirstAuthAt = new Map<string, string>()
+  private isInitialized = false
+  private lastTriggerSource: ExecutionTriggerSource | undefined
+  private disabledEvents = new Set<TelemetryEventName>(DEFAULT_DISABLED_EVENTS)
+  private desktopEntryAttribution: DesktopEntryAttribution | null = null
+  private stopSubscriptionTierWatch: WatchStopHandle | null = null
+
+  constructor() {
+    const windowConfig = window.__CONFIG__
+    watch(
+      remoteConfig,
+      (config) => {
+        this.configureDisabledEvents(config)
+      },
+      { immediate: true }
+    )
+
+    const apiKey =
+      windowConfig?.posthog_project_token ??
+      import.meta.env.VITE_POSTHOG_PROJECT_TOKEN
+    if (apiKey) {
+      try {
+        void import('posthog-js')
+          .then(async (posthogModule) => {
+            this.posthog = posthogModule.default
+            const serverConfig = remoteConfig.value.posthog_config ?? {}
+            this.posthog.init(apiKey, {
+              api_host:
+                windowConfig?.posthog_api_host || DEFAULT_POSTHOG_API_HOST,
+              ...COMFY_POSTHOG_OPTIONS,
+              debug: import.meta.env.VITE_POSTHOG_DEBUG === 'true',
+              ...serverConfig,
+              // cookie_domain omitted: posthog-js sets a first-party cross-subdomain cookie
+              // automatically when persistence includes 'cookie' (the default).
+              // Explicit override interacts badly with posthog-js#3578 where reset() fails
+              // to clear localStorage on other subdomains, causing identity bleed on logout.
+              before_send: [stampPlatformAxes, createPostHogBeforeSend()]
+            })
+            this.isInitialized = true
+            this.desktopEntryAttribution = readDesktopEntryAttribution(
+              this.posthog
+            )
+            this.registerDesktopEntryProps()
+            this.flushEventQueue()
+
+            await whenStoresReady()
+            const currentUser = useCurrentUser()
+            currentUser.onUserResolved((user) => {
+              if (this.posthog && user.id) {
+                this.posthog.identify(user.id)
+                this.setDesktopEntryPersonProperties()
+                this.setSubscriptionProperties()
+              }
+            })
+            // Anchored to session state rather than the logout button so it
+            // also covers token revocation, account deletion, and cross-tab
+            // sign-out (browserLocalPersistence). A logout that lands during
+            // the posthog-js dynamic-import window will not be observed here:
+            // events buffered pre-init are intentionally NOT queue-cleared on
+            // logout, which leaves a narrow race where a logout + different
+            // login both inside the import window would flush pre-init events
+            // under the new identity. Accepted as a known edge — re-adding
+            // pre-init logout handling would defeat the simplification.
+            currentUser.onUserLogout(() => {
+              this.posthog?.reset(true)
+              this.registerDesktopEntryProps()
+            })
+          })
+          .catch((error) => {
+            console.error('Failed to load PostHog:', error)
+            this.isEnabled = false
+          })
+      } catch (error) {
+        console.error('Failed to initialize PostHog:', error)
+        this.isEnabled = false
+      }
+    } else {
+      console.warn('PostHog API key not provided in runtime config')
+      this.isEnabled = false
+    }
+  }
+
+  private flushEventQueue(): void {
+    if (!this.isInitialized || !this.posthog) return
+
+    this.flushPendingFirstAuthAt()
+
+    while (this.eventQueue.length > 0) {
+      const event = this.eventQueue.shift()!
+      try {
+        this.posthog.capture(event.eventName, event.properties || {})
+      } catch (error) {
+        console.error('Failed to track queued PostHog event:', error)
+      }
+    }
+  }
+
+  private flushPendingFirstAuthAt(): void {
+    for (const [userId, firstAuthAt] of this.pendingFirstAuthAt) {
+      this.setFirstAuthAt(userId, firstAuthAt)
+    }
+    this.pendingFirstAuthAt.clear()
+  }
+
+  private setFirstAuthAt(
+    userId: string,
+    firstAuthAt = new Date().toISOString()
+  ): void {
+    if (!this.isEnabled) return
+
+    if (this.isInitialized && this.posthog) {
+      try {
+        this.posthog.identify(userId, undefined, { first_auth_at: firstAuthAt })
+      } catch (error) {
+        console.error('Failed to set PostHog first auth timestamp:', error)
+      }
+      return
+    }
+
+    if (!this.pendingFirstAuthAt.has(userId)) {
+      this.pendingFirstAuthAt.set(userId, firstAuthAt)
+    }
+  }
+
+  private trackEvent(
+    eventName: TelemetryEventName,
+    properties?: TelemetryEventProperties
+  ): void {
+    if (!this.isEnabled) return
+    if (this.disabledEvents.has(eventName)) return
+
+    const event: QueuedEvent = { eventName, properties }
+
+    if (this.isInitialized && this.posthog) {
+      try {
+        this.posthog.capture(eventName, properties || {})
+      } catch (error) {
+        console.error('Failed to track PostHog event:', error)
+      }
+    } else {
+      this.eventQueue.push(event)
+    }
+  }
+
+  private captureRaw(
+    eventName: TelemetryEventName,
+    properties?: Record<string, unknown>
+  ): void {
+    if (!this.isEnabled) return
+    if (this.disabledEvents.has(eventName)) return
+
+    if (this.isInitialized && this.posthog) {
+      try {
+        this.posthog.capture(eventName, properties || {})
+      } catch (error) {
+        console.error('Failed to track PostHog event:', error)
+      }
+    } else {
+      this.eventQueue.push({
+        eventName,
+        properties
+      })
+    }
+  }
+
+  private configureDisabledEvents(
+    config: Pick<RemoteConfig, 'telemetry_disabled_events'> | null | undefined
+  ): void {
+    const disabledSource =
+      config?.telemetry_disabled_events ?? DEFAULT_DISABLED_EVENTS
+
+    this.disabledEvents = this.buildEventSet(disabledSource)
+  }
+
+  private buildEventSet(
+    values: readonly TelemetryEventName[]
+  ): Set<TelemetryEventName> {
+    return new Set(
+      values.filter((value) => {
+        const isValid = TELEMETRY_EVENT_SET.has(value)
+        if (!isValid && import.meta.env.DEV) {
+          console.warn(
+            `Unknown telemetry event name in disabled list: ${value}`
+          )
+        }
+        return isValid
+      })
+    )
+  }
+
+  private registerDesktopEntryProps(): void {
+    if (!this.posthog || !this.desktopEntryAttribution) return
+    const { props } = this.desktopEntryAttribution
+    try {
+      if (!props.desktop_device_id) {
+        this.posthog.unregister('desktop_device_id')
+      }
+      this.posthog.register(props)
+    } catch (error) {
+      console.error('Failed to register desktop entry props:', error)
+    }
+  }
+
+  // Persisted onto the person so backend-fired billing events inherit
+  // desktop_device_id via person-on-events at ingest.
+  private setDesktopEntryPersonProperties(): void {
+    if (!this.posthog || this.desktopEntryAttribution?.source !== 'url') return
+    const now = new Date().toISOString()
+    try {
+      this.posthog.people.set({
+        ...this.desktopEntryAttribution.props,
+        last_seen_via_desktop: now
+      })
+      this.posthog.people.set_once({ first_seen_via_desktop: now })
+    } catch (error) {
+      console.error('Failed to set desktop entry person properties:', error)
+    }
+  }
+
+  private setSubscriptionProperties(): void {
+    if (this.stopSubscriptionTierWatch) return
+    const { tier } = useBillingContext()
+    this.stopSubscriptionTierWatch = watch(
+      tier,
+      (value) => {
+        if (value && this.posthog) {
+          this.posthog.people.set({ subscription_tier: value })
+        }
+      },
+      { immediate: true }
+    )
+  }
+
+  trackSignupOpened(): void {
+    this.trackEvent(TelemetryEvents.USER_SIGN_UP_OPENED)
+  }
+
+  trackAuth(metadata: AuthMetadata): void {
+    if (metadata.is_new_user && metadata.user_id) {
+      this.setFirstAuthAt(metadata.user_id)
+    }
+    this.trackEvent(TelemetryEvents.USER_AUTH_COMPLETED, metadata)
+  }
+
+  trackAuthFailed(metadata: AuthErrorMetadata): void {
+    this.trackEvent(TelemetryEvents.USER_AUTH_FAILED, metadata)
+  }
+
+  trackUnifiedAuthRetry(metadata: UnifiedAuthRetryMetadata): void {
+    this.trackEvent(
+      metadata.outcome === 'succeeded'
+        ? TelemetryEvents.UNIFIED_AUTH_RETRY_SUCCEEDED
+        : TelemetryEvents.UNIFIED_AUTH_RETRY_FAILED,
+      metadata
+    )
+  }
+
+  trackUnifiedAuthRefresh(metadata: UnifiedAuthRefreshMetadata): void {
+    this.trackEvent(
+      metadata.outcome === 'succeeded'
+        ? TelemetryEvents.UNIFIED_AUTH_REFRESH_SUCCEEDED
+        : TelemetryEvents.UNIFIED_AUTH_REFRESH_FAILED,
+      metadata
+    )
+  }
+
+  trackWebSessionEvent(event: WebSessionTelemetryEvent): void {
+    this.trackEvent(event.name, event.properties)
+  }
+
+  trackSsoEvent(event: SsoTelemetryEvent): void {
+    this.trackEvent(event.name, event.properties)
+  }
+
+  trackImageLoadFailed(metadata: ImageLoadFailureMetadata): void {
+    this.trackEvent(TelemetryEvents.IMAGE_LOAD_FAILED, metadata)
+  }
+
+  trackBootstrapComplete(metadata: BootstrapCompleteMetadata): void {
+    this.trackEvent(TelemetryEvents.BOOTSTRAP_COMPLETE, metadata)
+  }
+
+  trackUserLoggedIn(): void {
+    this.trackEvent(TelemetryEvents.USER_LOGGED_IN)
+  }
+
+  trackSubscription(
+    event: 'modal_opened' | 'subscribe_clicked',
+    metadata?: SubscriptionMetadata
+  ): void {
+    const eventName =
+      event === 'modal_opened'
+        ? TelemetryEvents.SUBSCRIPTION_REQUIRED_MODAL_OPENED
+        : TelemetryEvents.SUBSCRIBE_NOW_BUTTON_CLICKED
+
+    this.trackEvent(eventName, metadata)
+  }
+
+  trackAddApiCreditButtonClicked(metadata?: AddCreditsClickMetadata): void {
+    this.trackEvent(TelemetryEvents.ADD_API_CREDIT_BUTTON_CLICKED, metadata)
+  }
+
+  trackBeginCheckout(metadata: BeginCheckoutMetadata): void {
+    this.trackEvent(TelemetryEvents.BEGIN_CHECKOUT, metadata)
+  }
+
+  trackMonthlySubscriptionSucceeded(
+    metadata?: SubscriptionSuccessMetadata
+  ): void {
+    this.trackEvent(TelemetryEvents.MONTHLY_SUBSCRIPTION_SUCCEEDED, metadata)
+  }
+
+  trackMonthlySubscriptionCancelled(): void {
+    this.trackEvent(TelemetryEvents.MONTHLY_SUBSCRIPTION_CANCELLED)
+  }
+
+  trackSubscriptionCancellation(
+    event: 'flow_opened' | 'confirmed' | 'abandoned' | 'failed',
+    metadata?: SubscriptionCancellationMetadata
+  ): void {
+    this.trackEvent(CANCELLATION_STAGE_EVENTS[event], metadata)
+  }
+
+  trackResubscribeClicked(metadata: ResubscribeClickMetadata): void {
+    this.trackEvent(TelemetryEvents.RESUBSCRIBE_BUTTON_CLICKED, metadata)
+  }
+
+  trackApiCreditTopupButtonPurchaseClicked(amount: number): void {
+    this.trackEvent(TelemetryEvents.API_CREDIT_TOPUP_BUTTON_PURCHASE_CLICKED, {
+      credit_amount: amount
+    })
+  }
+
+  trackApiCreditTopupSucceeded(): void {
+    this.trackEvent(TelemetryEvents.API_CREDIT_TOPUP_SUCCEEDED)
+  }
+
+  trackWorkspaceInviteSent(metadata: WorkspaceInviteMetadata): void {
+    this.trackEvent(TelemetryEvents.WORKSPACE_INVITE_SENT, metadata)
+  }
+
+  trackWorkspaceInviteFailed(metadata: WorkspaceInviteFailedMetadata): void {
+    this.trackEvent(TelemetryEvents.WORKSPACE_INVITE_FAILED, metadata)
+  }
+
+  trackBillingEvent(event: BillingTelemetryEvent): void {
+    this.trackEvent(
+      getBillingTelemetryEventName(event),
+      getCloudAppBillingTelemetryEventPayload(event)
+    )
+  }
+
+  trackCheckoutJourneyEvent(event: CheckoutJourneyTelemetryEvent): void {
+    const name = getCheckoutJourneyTelemetryEventName(event)
+    const payload = getCloudAppCheckoutJourneyTelemetryEventPayload(event)
+    if (event.phase === 'abandoned' && event.exit === 'page_exit') {
+      this.captureOnTeardown(name, payload)
+      return
+    }
+    this.trackEvent(name, payload)
+  }
+
+  trackAgentPaywallShown(metadata: AgentPaywallShownMetadata): void {
+    this.trackEvent(TelemetryEvents.AGENT_PAYWALL_SHOWN, metadata)
+  }
+
+  trackAgentPaywallCtaClicked(metadata: AgentPaywallCtaMetadata): void {
+    this.trackEvent(TelemetryEvents.AGENT_PAYWALL_CTA_CLICKED, metadata)
+  }
+
+  trackAgentCreditTransitionNotice(
+    metadata: AgentCreditTransitionNoticeMetadata
+  ): void {
+    this.trackEvent(TelemetryEvents.AGENT_CREDIT_TRANSITION_NOTICE, metadata)
+  }
+
+  trackRunButton(properties: RunButtonProperties): void {
+    this.lastTriggerSource = properties.trigger_source
+    this.trackEvent(TelemetryEvents.RUN_BUTTON_CLICKED, properties)
+  }
+
+  trackOnboardingTour(
+    stage: OnboardingTourStage,
+    metadata: OnboardingTourMetadata
+  ): void {
+    this.trackEvent(OnboardingTourEvents[stage], metadata)
+  }
+
+  trackSurvey(
+    stage: 'opened' | 'submitted',
+    responses?: SurveyResponses
+  ): void {
+    const eventName =
+      stage === 'opened'
+        ? TelemetryEvents.USER_SURVEY_OPENED
+        : TelemetryEvents.USER_SURVEY_SUBMITTED
+
+    const normalizedResponses = responses
+      ? normalizeSurveyResponses(responses)
+      : undefined
+
+    this.trackEvent(eventName, normalizedResponses)
+
+    if (
+      stage === 'submitted' &&
+      normalizedResponses &&
+      this.posthog &&
+      this.isEnabled &&
+      !this.disabledEvents.has(TelemetryEvents.USER_SURVEY_SUBMITTED)
+    ) {
+      try {
+        this.posthog.people.set(normalizedResponses)
+      } catch (error) {
+        console.error('Failed to set PostHog user properties:', error)
+      }
+    }
+  }
+
+  trackInAppSurvey(
+    stage: InAppSurveyStage,
+    { surveyId, responses = {}, properties = {} }: InAppSurveyEvent
+  ): void {
+    const responseProperties = Object.fromEntries(
+      Object.entries(responses).map(([questionId, answer]) => [
+        `$survey_response_${questionId}`,
+        answer
+      ])
+    )
+    this.captureRaw(IN_APP_SURVEY_EVENTS[stage], {
+      ...properties,
+      ...responseProperties,
+      $survey_id: surveyId
+    })
+  }
+
+  trackEmailVerification(stage: 'opened' | 'requested' | 'completed'): void {
+    let eventName: TelemetryEventName
+
+    switch (stage) {
+      case 'opened':
+        eventName = TelemetryEvents.USER_EMAIL_VERIFY_OPENED
+        break
+      case 'requested':
+        eventName = TelemetryEvents.USER_EMAIL_VERIFY_REQUESTED
+        break
+      case 'completed':
+        eventName = TelemetryEvents.USER_EMAIL_VERIFY_COMPLETED
+        break
+    }
+
+    this.trackEvent(eventName)
+  }
+
+  trackTemplate(metadata: TemplateMetadata): void {
+    this.trackEvent(TelemetryEvents.TEMPLATE_WORKFLOW_OPENED, metadata)
+  }
+
+  trackTemplateLibraryOpened(metadata: TemplateLibraryMetadata): void {
+    this.trackEvent(TelemetryEvents.TEMPLATE_LIBRARY_OPENED, metadata)
+  }
+
+  trackTemplateLibraryClosed(metadata: TemplateLibraryClosedMetadata): void {
+    this.trackEvent(TelemetryEvents.TEMPLATE_LIBRARY_CLOSED, metadata)
+  }
+
+  trackWorkflowImported(metadata: WorkflowImportMetadata): void {
+    this.trackEvent(TelemetryEvents.WORKFLOW_IMPORTED, metadata)
+  }
+
+  trackWorkflowOpened(metadata: WorkflowImportMetadata): void {
+    this.trackEvent(TelemetryEvents.WORKFLOW_OPENED, metadata)
+  }
+
+  trackWorkflowSaved(metadata: WorkflowSavedMetadata): void {
+    this.trackEvent(TelemetryEvents.WORKFLOW_SAVED, metadata)
+  }
+
+  trackDefaultViewSet(metadata: DefaultViewSetMetadata): void {
+    this.trackEvent(TelemetryEvents.DEFAULT_VIEW_SET, metadata)
+  }
+
+  trackEnterLinear(metadata: EnterLinearMetadata): void {
+    this.trackEvent(TelemetryEvents.ENTER_LINEAR_MODE, metadata)
+  }
+
+  trackShareFlow(metadata: ShareFlowMetadata): void {
+    this.trackEvent(TelemetryEvents.SHARE_FLOW, metadata)
+  }
+
+  trackShareLinkOpened(metadata: ShareLinkOpenedMetadata): void {
+    this.trackEvent(TelemetryEvents.SHARE_LINK_OPENED, metadata)
+  }
+
+  trackPageVisibilityChanged(metadata: PageVisibilityMetadata): void {
+    this.trackEvent(TelemetryEvents.PAGE_VISIBILITY_CHANGED, metadata)
+  }
+
+  trackTabCount(metadata: TabCountMetadata): void {
+    this.trackEvent(TelemetryEvents.TAB_COUNT_TRACKING, metadata)
+  }
+
+  trackShellLayout(metadata: ShellLayoutMetadata): void {
+    this.trackEvent(TelemetryEvents.SHELL_LAYOUT, metadata)
+  }
+
+  trackNodeSearch(metadata: NodeSearchMetadata): void {
+    this.trackEvent(TelemetryEvents.NODE_SEARCH, metadata)
+  }
+
+  trackNodeSearchResultSelected(metadata: NodeSearchResultMetadata): void {
+    this.trackEvent(TelemetryEvents.NODE_SEARCH_RESULT_SELECTED, metadata)
+  }
+
+  trackSearchQuery(metadata: SearchQueryMetadata): void {
+    this.trackEvent(TelemetryEvents.SEARCH_QUERY, metadata)
+  }
+
+  trackNodeAdded(metadata: NodeAddedMetadata): void {
+    this.trackEvent(TelemetryEvents.NODE_ADDED, metadata)
+  }
+
+  trackTemplateFilterChanged(metadata: TemplateFilterMetadata): void {
+    this.trackEvent(TelemetryEvents.TEMPLATE_FILTER_CHANGED, metadata)
+  }
+
+  trackHelpCenterOpened(metadata: HelpCenterOpenedMetadata): void {
+    this.trackEvent(TelemetryEvents.HELP_CENTER_OPENED, metadata)
+  }
+
+  trackHelpResourceClicked(metadata: HelpResourceClickedMetadata): void {
+    this.trackEvent(TelemetryEvents.HELP_RESOURCE_CLICKED, metadata)
+  }
+
+  trackHelpCenterClosed(metadata: HelpCenterClosedMetadata): void {
+    this.trackEvent(TelemetryEvents.HELP_CENTER_CLOSED, metadata)
+  }
+
+  trackWorkflowCreated(metadata: WorkflowCreatedMetadata): void {
+    this.trackEvent(TelemetryEvents.WORKFLOW_CREATED, metadata)
+  }
+
+  trackSharedWorkflowRun(metadata: SharedWorkflowRunMetadata): void {
+    this.trackEvent(TelemetryEvents.SHARED_WORKFLOW_RUN, metadata)
+  }
+
+  trackWorkflowExecution(): void {
+    this.captureRaw(TelemetryEvents.EXECUTION_START, {
+      ...getExecutionContext(),
+      trigger_source: this.lastTriggerSource ?? 'unknown',
+      // Sampled here rather than carried from the click: no successful run
+      // path puts an asynchronous boundary between the two calls, so a carried
+      // value could only differ from this read on a click that never executed
+      // — and there it would linger and attach a stale panel state to an
+      // unrelated later run.
+      agent_panel_open: getAgentPanelOpen(),
+      event_source: EXECUTION_EVENT_SOURCE
+    })
+    this.lastTriggerSource = undefined
+  }
+
+  trackExecutionError(metadata: ExecutionErrorMetadata): void {
+    this.captureRaw(TelemetryEvents.EXECUTION_ERROR, {
+      ...metadata,
+      event_source: EXECUTION_EVENT_SOURCE
+    })
+  }
+
+  trackExecutionSuccess(metadata: ExecutionSuccessMetadata): void {
+    this.captureRaw(TelemetryEvents.EXECUTION_SUCCESS, {
+      ...metadata,
+      event_source: EXECUTION_EVENT_SOURCE
+    })
+  }
+
+  trackSettingChanged(metadata: SettingChangedMetadata): void {
+    this.trackEvent(TelemetryEvents.SETTING_CHANGED, metadata)
+  }
+
+  trackUiButtonClicked(metadata: UiButtonClickMetadata): void {
+    this.trackEvent(TelemetryEvents.UI_BUTTON_CLICKED, metadata)
+  }
+
+  trackAgentMessageFeedback(metadata: AgentMessageFeedbackMetadata): void {
+    this.trackEvent(TelemetryEvents.AGENT_MESSAGE_FEEDBACK, metadata)
+  }
+
+  trackAgentPanelOpened(metadata: AgentPanelOpenedMetadata): void {
+    this.trackEvent(TelemetryEvents.AGENT_PANEL_OPENED, metadata)
+  }
+
+  trackAgentPanelClosed(metadata: AgentPanelClosedMetadata): void {
+    if (metadata.source === 'pagehide') {
+      this.captureOnTeardown(TelemetryEvents.AGENT_PANEL_CLOSED, metadata)
+      return
+    }
+    this.trackEvent(TelemetryEvents.AGENT_PANEL_CLOSED, metadata)
+  }
+
+  /**
+   * A normal `capture()` batches for its next flush, which a pagehide-time
+   * event may never see - the tab can be gone before that timer runs. Forces
+   * an immediate `sendBeacon` send instead, the one transport browsers keep
+   * alive past teardown. Does not queue for later: if PostHog has not loaded
+   * yet, the page may already be gone before it does.
+   */
+  private captureOnTeardown(
+    eventName: TelemetryEventName,
+    properties: TelemetryEventProperties
+  ): void {
+    if (!this.isEnabled) return
+    if (this.disabledEvents.has(eventName)) return
+    if (!this.isInitialized || !this.posthog) return
+
+    try {
+      this.posthog.capture(eventName, properties, {
+        transport: 'sendBeacon',
+        send_instantly: true
+      })
+    } catch (error) {
+      console.error('Failed to track PostHog teardown event:', error)
+    }
+  }
+
+  trackAgentEntryButtonClicked(
+    metadata: AgentEntryButtonClickedMetadata
+  ): void {
+    this.trackEvent(TelemetryEvents.AGENT_ENTRY_BUTTON_CLICKED, metadata)
+  }
+
+  trackAgentCloseButtonClicked(): void {
+    this.trackEvent(TelemetryEvents.AGENT_CLOSE_BUTTON_CLICKED, {})
+  }
+
+  trackAgentConsentShown(metadata: AgentConsentShownMetadata): void {
+    this.trackEvent(TelemetryEvents.AGENT_CONSENT_SHOWN, metadata)
+  }
+
+  trackAgentConsentResolved(metadata: AgentConsentResolvedMetadata): void {
+    this.trackEvent(TelemetryEvents.AGENT_CONSENT_RESOLVED, metadata)
+  }
+
+  trackAgentOnboardingShown(): void {
+    this.trackEvent(TelemetryEvents.AGENT_ONBOARDING_SHOWN, {})
+  }
+
+  trackAgentOnboardingStep(metadata: AgentOnboardingStepMetadata): void {
+    this.trackEvent(TelemetryEvents.AGENT_ONBOARDING_STEP, metadata)
+  }
+
+  trackAgentMessageSent(metadata: AgentMessageSentMetadata): void {
+    this.trackEvent(TelemetryEvents.AGENT_MESSAGE_SENT, metadata)
+  }
+
+  trackAgentStarterPromptClicked(
+    metadata: AgentStarterPromptClickedMetadata
+  ): void {
+    this.trackEvent(TelemetryEvents.AGENT_STARTER_PROMPT_CLICKED, metadata)
+  }
+
+  trackAgentStarterPromptExposure(
+    metadata: AgentStarterPromptExposureMetadata
+  ): void {
+    this.trackEvent(TelemetryEvents.AGENT_STARTER_PROMPT_EXPOSURE, metadata)
+  }
+
+  trackAgentFreeUseNotice(metadata: AgentFreeUseNoticeMetadata): void {
+    this.trackEvent(TelemetryEvents.AGENT_FREE_USE_NOTICE, metadata)
+  }
+
+  trackAgentFreeUseExposure(metadata: AgentFreeUseExposureMetadata): void {
+    this.trackEvent(TelemetryEvents.AGENT_FREE_USE_EXPOSURE, metadata)
+  }
+
+  trackAgentNodeTagged(metadata: AgentNodeTaggedMetadata): void {
+    this.trackEvent(TelemetryEvents.AGENT_NODE_TAGGED, metadata)
+  }
+
+  trackAgentAttachButtonClicked(
+    metadata: AgentAttachButtonClickedMetadata
+  ): void {
+    this.trackEvent(TelemetryEvents.AGENT_ATTACH_BUTTON_CLICKED, metadata)
+  }
+
+  trackAgentWorkflowApplied(metadata: AgentWorkflowAppliedMetadata): void {
+    this.trackEvent(TelemetryEvents.AGENT_WORKFLOW_APPLIED, metadata)
+  }
+
+  // fallow-ignore-next-line unused-class-member
+  trackAgentGraphProjection(metadata: AgentGraphProjectionMetadata): void {
+    this.trackEvent(TelemetryEvents.AGENT_GRAPH_PROJECTION, metadata)
+  }
+
+  // fallow-ignore-next-line unused-class-member
+  trackAgentError(metadata: AgentErrorMetadata): void {
+    this.trackEvent(TelemetryEvents.AGENT_ERROR, metadata)
+  }
+
+  trackAgentStopClicked(metadata: AgentStopClickedMetadata): void {
+    this.trackEvent(TelemetryEvents.AGENT_STOP_CLICKED, metadata)
+  }
+
+  trackAgentWorkflowBound(metadata: AgentWorkflowBoundMetadata): void {
+    this.trackEvent(TelemetryEvents.AGENT_WORKFLOW_BOUND, metadata)
+  }
+
+  trackAgentRunApprovalShown(metadata: AgentRunApprovalShownMetadata): void {
+    this.trackEvent(TelemetryEvents.AGENT_RUN_APPROVAL_SHOWN, metadata)
+  }
+
+  trackAgentRunApprovalResolved(
+    metadata: AgentRunApprovalResolvedMetadata
+  ): void {
+    this.trackEvent(TelemetryEvents.AGENT_RUN_APPROVAL_RESOLVED, metadata)
+  }
+
+  trackAgentRunModeChanged(metadata: AgentRunModeChangedMetadata): void {
+    this.trackEvent(TelemetryEvents.AGENT_RUN_MODE_CHANGED, metadata)
+  }
+
+  trackAgentThreadStarted(metadata: AgentThreadStartedMetadata): void {
+    this.trackEvent(TelemetryEvents.AGENT_THREAD_STARTED, metadata)
+  }
+
+  trackAgentConsentNotOffered(metadata: AgentConsentNotOfferedMetadata): void {
+    this.trackEvent(TelemetryEvents.AGENT_CONSENT_NOT_OFFERED, metadata)
+  }
+
+  trackAgentConsentOfferExited(
+    metadata: AgentConsentOfferExitedMetadata
+  ): void {
+    this.trackEvent(TelemetryEvents.AGENT_CONSENT_OFFER_EXITED, metadata)
+  }
+
+  trackAgentOnboardingNotShown(
+    metadata: AgentOnboardingNotShownMetadata
+  ): void {
+    this.trackEvent(TelemetryEvents.AGENT_ONBOARDING_NOT_SHOWN, metadata)
+  }
+
+  trackWidgetFavoriteToggled(metadata: WidgetFavoriteToggledMetadata): void {
+    this.trackEvent(TelemetryEvents.WIDGET_FAVORITE_TOGGLED, metadata)
+  }
+
+  trackLinkDedupDrop(metadata: LinkDedupDropMetadata): void {
+    this.trackEvent(TelemetryEvents.LINK_DEDUP_DROP, metadata)
+  }
+
+  trackNamedValuesShadowDiffMismatch(
+    metadata: NamedValuesShadowDiffMismatchMetadata
+  ): void {
+    this.trackEvent(TelemetryEvents.NAMED_VALUES_SHADOW_DIFF_MISMATCH, metadata)
+  }
+
+  trackNamedValuesShadowDiffSummary(
+    metadata: NamedValuesShadowDiffSummaryMetadata
+  ): void {
+    this.trackEvent(TelemetryEvents.NAMED_VALUES_SHADOW_DIFF_SUMMARY, metadata)
+  }
+
+  trackPageView(pageName: string, properties?: PageViewMetadata): void {
+    this.captureRaw(TelemetryEvents.PAGE_VIEW, {
+      page_name: pageName,
+      ...properties
+    })
+  }
+}

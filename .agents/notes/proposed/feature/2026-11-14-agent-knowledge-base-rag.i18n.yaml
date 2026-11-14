@@ -1,0 +1,37 @@
+# Bilingual-pair consistency record for .agents/notes/proposed/feature/2026-11-14-agent-knowledge-base-rag.md ↔ .agents/notes/proposed/feature/2026-11-14-agent-knowledge-base-rag.zh.md: per heading
+# section, a hash of its English and Chinese blocks outside code blocks and generated regions.
+# After editing either side, bring the other along and re-record with:
+#   pnpm run verify-translation-pairing --write .agents/notes/proposed/feature/2026-11-14-agent-knowledge-base-rag.md
+/agent-note-agents-retrieve-processing-guidance-from-a-local-knowledge-base:
+  en: a8d4104af01f881c
+  zh: 53675a1a3ba5dccd
+/agent-note-agents-retrieve-processing-guidance-from-a-local-knowledge-base/problem:
+  en: 750df8b381dd9581
+  zh: 945f2d989a180fb9
+/agent-note-agents-retrieve-processing-guidance-from-a-local-knowledge-base/proposal:
+  en: dc47e4d982f08e40
+  zh: 181c6fbc0c9e5781
+/agent-note-agents-retrieve-processing-guidance-from-a-local-knowledge-base/proposal/corpus:
+  en: de47f22d02ee5d03
+  zh: e9a39b4fc2ec4377
+/agent-note-agents-retrieve-processing-guidance-from-a-local-knowledge-base/proposal/retrieval:
+  en: 89b6c477cd6fb10a
+  zh: c6857dce4c7bf676
+/agent-note-agents-retrieve-processing-guidance-from-a-local-knowledge-base/proposal/mcp-surface:
+  en: 92ae39e8ee418bb0
+  zh: 90009468e6ae4f2f
+/agent-note-agents-retrieve-processing-guidance-from-a-local-knowledge-base/proposal/locality-and-ownership:
+  en: 54fb926f121bb580
+  zh: 6fd55a86df3cb8c7
+/agent-note-agents-retrieve-processing-guidance-from-a-local-knowledge-base/proposal/authoring-and-operation:
+  en: b9aa550d1b49c19b
+  zh: 611d08d38cbf22b0
+/agent-note-agents-retrieve-processing-guidance-from-a-local-knowledge-base/alternatives-considered:
+  en: 2215c224c8abf826
+  zh: e61759263b23252a
+/agent-note-agents-retrieve-processing-guidance-from-a-local-knowledge-base/acceptance-criteria:
+  en: 194bc6a17f1aa22a
+  zh: 86406e16c1a06b4a
+/agent-note-agents-retrieve-processing-guidance-from-a-local-knowledge-base/risks:
+  en: 4f7f5b508b913dca
+  zh: ad9c627222a008ef

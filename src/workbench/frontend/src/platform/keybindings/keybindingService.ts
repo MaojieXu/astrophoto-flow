@@ -1,0 +1,184 @@
+import { isCloud } from '@/platform/distribution/types'
+import { useSettingStore } from '@/platform/settings/settingStore'
+import { useCommandStore } from '@/stores/commandStore'
+import { useDialogStore } from '@/stores/dialogStore'
+import { isModalOpen } from '@/utils/modalUtil'
+
+import { CORE_KEYBINDINGS } from './defaults'
+import { consultEscapeOverride } from './escapeOverride'
+import { KeyComboImpl } from './keyCombo'
+import { KeybindingImpl } from './keybinding'
+import { useKeybindingStore } from './keybindingStore'
+
+export function useKeybindingService() {
+  const keybindingStore = useKeybindingStore()
+  const commandStore = useCommandStore()
+  const settingStore = useSettingStore()
+  const dialogStore = useDialogStore()
+
+  function getExecutableKeybinding(keyCombo: KeyComboImpl) {
+    const keybinding = keybindingStore.getKeybinding(keyCombo)
+    return keybinding && commandStore.isRegistered(keybinding.commandId)
+      ? keybinding
+      : undefined
+  }
+
+  function executeCanvasKeybinding(event: KeyboardEvent): boolean {
+    if (event.type !== 'keydown' || event.repeat) return false
+    if (isModalOpen(dialogStore.dialogStack.length)) return false
+
+    const keybinding = getExecutableKeybinding(KeyComboImpl.fromEvent(event))
+    if (keybinding?.targetElementId !== 'graph-canvas-container') return false
+
+    void commandStore.execute(keybinding.commandId)
+    event.preventDefault()
+    event.stopImmediatePropagation()
+    return true
+  }
+
+  async function keybindHandler(event: KeyboardEvent) {
+    const keyCombo = KeyComboImpl.fromEvent(event)
+    if (keyCombo.isModifier) {
+      return
+    }
+
+    const target = event.composedPath()[0] as HTMLElement
+    // Let the active menu own Escape without also triggering the global shortcut.
+    // `target` is usually the focused element, but when nothing has focus some
+    // browsers (e.g. Safari) target the event at `document` instead of
+    // `document.body`, which has no `closest` method.
+    if (
+      event.key === 'Escape' &&
+      target instanceof Element &&
+      target.closest('[role="menu"], [role="menubar"], [role="dialog"]')
+    ) {
+      return
+    }
+
+    if (
+      keyCombo.isReservedByTextInput &&
+      (target.tagName === 'TEXTAREA' ||
+        target.tagName === 'INPUT' ||
+        target.contentEditable === 'true' ||
+        (target.tagName === 'SPAN' &&
+          target.classList.contains('property_value')))
+    ) {
+      return
+    }
+
+    const keybinding = getExecutableKeybinding(keyCombo)
+    if (keybinding) {
+      const targetElementId =
+        keybinding.targetElementId === 'graph-canvas'
+          ? 'graph-canvas-container'
+          : keybinding.targetElementId
+      if (targetElementId) {
+        const container = document.getElementById(targetElementId)
+        if (!container?.contains(target)) {
+          return
+        }
+      }
+      if (isModalOpen(dialogStore.dialogStack.length)) {
+        // Bare keys still have to reach inputs inside the dialog.
+        if (keyCombo.ctrl) {
+          event.preventDefault()
+        }
+        return
+      }
+
+      // A registered override (e.g. the agent composer owning Escape while a
+      // turn is running) wins over the default keybinding, but only once an
+      // open menu or dialog has already had first refusal above - those are
+      // more specific to the moment than "some feature elsewhere is running".
+      if (event.key === 'Escape' && consultEscapeOverride(event)) {
+        if (!event.defaultPrevented) event.preventDefault()
+        return
+      }
+
+      event.preventDefault()
+      const runCommandIds = new Set([
+        'Comfy.QueuePrompt',
+        'Comfy.QueuePromptFront',
+        'Comfy.QueueSelectedOutputNodes'
+      ])
+      if (runCommandIds.has(keybinding.commandId)) {
+        await commandStore.execute(keybinding.commandId, {
+          metadata: {
+            trigger_source: 'keybinding'
+          }
+        })
+      } else {
+        await commandStore.execute(keybinding.commandId)
+      }
+      return
+    }
+
+    if (event.ctrlKey || event.altKey || event.metaKey) {
+      return
+    }
+
+    if (event.key === 'Escape') {
+      const modals = document.querySelectorAll<HTMLElement>('.comfy-modal')
+      for (const modal of modals) {
+        const modalDisplay = window
+          .getComputedStyle(modal)
+          .getPropertyValue('display')
+
+        if (modalDisplay !== 'none') {
+          modal.style.display = 'none'
+          break
+        }
+      }
+
+      for (const d of document.querySelectorAll('dialog')) d.close()
+    }
+  }
+
+  function registerCoreKeybindings() {
+    for (const keybinding of CORE_KEYBINDINGS) {
+      if (
+        isCloud &&
+        keybinding.commandId === 'Workspace.ToggleBottomPanelTab.logs-terminal'
+      ) {
+        continue
+      }
+      keybindingStore.addDefaultKeybinding(new KeybindingImpl(keybinding))
+    }
+  }
+
+  function registerUserKeybindings() {
+    const unsetBindings = settingStore.get('Comfy.Keybinding.UnsetBindings')
+    for (const keybinding of unsetBindings) {
+      if (!commandStore.isRegistered(keybinding.commandId)) {
+        continue
+      }
+      keybindingStore.unsetKeybinding(new KeybindingImpl(keybinding))
+    }
+    const newBindings = settingStore.get('Comfy.Keybinding.NewBindings')
+    for (const keybinding of newBindings) {
+      if (
+        isCloud &&
+        keybinding.commandId === 'Workspace.ToggleBottomPanelTab.logs-terminal'
+      ) {
+        continue
+      }
+      keybindingStore.addUserKeybinding(new KeybindingImpl(keybinding))
+    }
+  }
+
+  async function persistUserKeybindings() {
+    await settingStore.setMany({
+      'Comfy.Keybinding.NewBindings': keybindingStore.getUserKeybindingValues(),
+      'Comfy.Keybinding.UnsetBindings':
+        keybindingStore.getUserUnsetKeybindingValues()
+    })
+  }
+
+  return {
+    executeCanvasKeybinding,
+    keybindHandler,
+    registerCoreKeybindings,
+    registerUserKeybindings,
+    persistUserKeybindings
+  }
+}

@@ -1,0 +1,106 @@
+<template>
+  <div
+    :class="
+      cn(
+        'minimap-panel flex flex-col gap-2 bg-comfy-menu-bg p-3 text-sm shadow-interface',
+        isMobile ? 'mb-2' : 'mr-2'
+      )
+    "
+    :style="panelStyles"
+  >
+    <div class="flex items-center gap-2">
+      <Checkbox
+        id="node-colors"
+        name="node-colors"
+        :model-value="nodeColors"
+        @update:model-value="
+          (value) => updateOption('Comfy.Minimap.NodeColors', value)
+        "
+      />
+      <i class="icon-[lucide--palette]" />
+      <label for="node-colors">{{ $t('minimap.nodeColors') }}</label>
+    </div>
+
+    <div class="flex items-center gap-2">
+      <Checkbox
+        id="show-links"
+        name="show-links"
+        :model-value="showLinks"
+        @update:model-value="
+          (value) => updateOption('Comfy.Minimap.ShowLinks', value)
+        "
+      />
+      <i class="icon-[lucide--route]" />
+      <label for="show-links">{{ $t('minimap.showLinks') }}</label>
+    </div>
+
+    <div class="flex items-center gap-2">
+      <Checkbox
+        id="show-groups"
+        name="show-groups"
+        :model-value="showGroups"
+        @update:model-value="
+          (value) => updateOption('Comfy.Minimap.ShowGroups', value)
+        "
+      />
+      <i class="icon-[lucide--frame]" />
+      <label for="show-groups">{{ $t('minimap.showGroups') }}</label>
+    </div>
+
+    <div class="flex items-center gap-2">
+      <Checkbox
+        id="render-bypass"
+        name="render-bypass"
+        :model-value="renderBypass"
+        @update:model-value="
+          (value) => updateOption('Comfy.Minimap.RenderBypassState', value)
+        "
+      />
+      <i class="icon-[lucide--circle-slash-2]" />
+      <label for="render-bypass">{{ $t('minimap.renderBypassState') }}</label>
+    </div>
+
+    <div class="flex items-center gap-2">
+      <Checkbox
+        id="render-error"
+        name="render-error"
+        :model-value="renderError"
+        @update:model-value="
+          (value) => updateOption('Comfy.Minimap.RenderErrorState', value)
+        "
+      />
+      <i class="icon-[lucide--message-circle-warning]" />
+      <label for="render-error">{{ $t('minimap.renderErrorState') }}</label>
+    </div>
+  </div>
+</template>
+
+<script setup lang="ts">
+import type { CSSProperties, Ref } from 'vue'
+import type { CheckboxRootEmits } from 'reka-ui'
+
+import Checkbox from '@/components/ui/checkbox/Checkbox.vue'
+import type { MinimapSettingsKey } from '@/renderer/extensions/minimap/types'
+import { cn } from '@comfyorg/tailwind-utils'
+
+defineProps<{
+  panelStyles: CSSProperties
+  nodeColors: boolean
+  showLinks: boolean
+  showGroups: boolean
+  renderBypass: boolean
+  renderError: boolean
+  isMobile: Ref<boolean> | boolean
+}>()
+
+const emit = defineEmits<{
+  updateOption: [key: MinimapSettingsKey, value: boolean]
+}>()
+
+function updateOption(
+  key: MinimapSettingsKey,
+  value: CheckboxRootEmits['update:modelValue'][0]
+) {
+  if (typeof value === 'boolean') emit('updateOption', key, value)
+}
+</script>

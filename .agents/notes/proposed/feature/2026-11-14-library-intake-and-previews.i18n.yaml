@@ -1,0 +1,46 @@
+# Bilingual-pair consistency record for .agents/notes/proposed/feature/2026-11-14-library-intake-and-previews.md ↔ .agents/notes/proposed/feature/2026-11-14-library-intake-and-previews.zh.md: per heading
+# section, a hash of its English and Chinese blocks outside code blocks and generated regions.
+# After editing either side, bring the other along and re-record with:
+#   pnpm run verify-translation-pairing --write .agents/notes/proposed/feature/2026-11-14-library-intake-and-previews.md
+/agent-note-import-fixes-identity-before-it-copies:
+  en: 3e4a22274f7a127c
+  zh: e497e0aad98fe1b7
+/agent-note-import-fixes-identity-before-it-copies/problem:
+  en: 594be5b2521b840d
+  zh: 56b767866a6939c6
+/agent-note-import-fixes-identity-before-it-copies/proposal:
+  en: 90a9378a94d0b01c
+  zh: 7a97105fa5cbedeb
+/agent-note-import-fixes-identity-before-it-copies/proposal/entry-points:
+  en: f9f43d53d94f78f7
+  zh: e9a7ab6d0600ea4b
+/agent-note-import-fixes-identity-before-it-copies/proposal/preflight:
+  en: 97356ad500d5ab07
+  zh: 0e5938ac9b821f40
+/agent-note-import-fixes-identity-before-it-copies/proposal/task-stages:
+  en: d803aabfbaadd5a9
+  zh: ae8bc2b18070ba34
+/agent-note-import-fixes-identity-before-it-copies/proposal/source-freeze-and-duplicates:
+  en: 6a7715c74243f1bb
+  zh: 169fc30f1ce1b26a
+/agent-note-import-fixes-identity-before-it-copies/proposal/formats-and-metadata:
+  en: ce102663c9799b6a
+  zh: 53889aa597261539
+/agent-note-import-fixes-identity-before-it-copies/proposal/previews:
+  en: 464e820905497db3
+  zh: 47377ace17f2165b
+/agent-note-import-fixes-identity-before-it-copies/proposal/cancellation-resume-and-retry:
+  en: 0bd1bd6c902868bc
+  zh: 9c54a3d79d017883
+/agent-note-import-fixes-identity-before-it-copies/proposal/report:
+  en: 9c52f90480707046
+  zh: f12416cee9df83fa
+/agent-note-import-fixes-identity-before-it-copies/alternatives-considered:
+  en: 06fe48849d9d5a96
+  zh: a1d8c56f4a09ea74
+/agent-note-import-fixes-identity-before-it-copies/acceptance-criteria:
+  en: 14bee096e205bf33
+  zh: cb2280aaaa523522
+/agent-note-import-fixes-identity-before-it-copies/risks:
+  en: 41edf0b5a28938d2
+  zh: 6efec24903fd4fca

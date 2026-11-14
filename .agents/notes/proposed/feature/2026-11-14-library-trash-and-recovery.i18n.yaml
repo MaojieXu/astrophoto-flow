@@ -1,0 +1,37 @@
+# Bilingual-pair consistency record for .agents/notes/proposed/feature/2026-11-14-library-trash-and-recovery.md ↔ .agents/notes/proposed/feature/2026-11-14-library-trash-and-recovery.zh.md: per heading
+# section, a hash of its English and Chinese blocks outside code blocks and generated regions.
+# After editing either side, bring the other along and re-record with:
+#   pnpm run verify-translation-pairing --write .agents/notes/proposed/feature/2026-11-14-library-trash-and-recovery.md
+/agent-note-trash-separates-removal-from-deletion:
+  en: 40d937c59e834997
+  zh: 33a900d7d172f5c9
+/agent-note-trash-separates-removal-from-deletion/problem:
+  en: 6e1572ce219f3396
+  zh: b5ccf547327b4266
+/agent-note-trash-separates-removal-from-deletion/proposal:
+  en: 5925d346345cbfe4
+  zh: 70c8da1aaaaf64a4
+/agent-note-trash-separates-removal-from-deletion/proposal/the-trash-entry:
+  en: f2f7052996606a91
+  zh: 75e3c2c467534eac
+/agent-note-trash-separates-removal-from-deletion/proposal/removal:
+  en: 172a1170d2eb9363
+  zh: 3fcacb562549ac0e
+/agent-note-trash-separates-removal-from-deletion/proposal/restore:
+  en: ce4b9cab527489ea
+  zh: dee190c632b58f9b
+/agent-note-trash-separates-removal-from-deletion/proposal/purge:
+  en: b0ba4a49d2715ffa
+  zh: 3a3d3e8e4f4b3b76
+/agent-note-trash-separates-removal-from-deletion/proposal/identity:
+  en: c8c161109d1d11a8
+  zh: 11a10a22065ce6eb
+/agent-note-trash-separates-removal-from-deletion/alternatives-considered:
+  en: d87df6a4edca771a
+  zh: e2864eb43e629fd9
+/agent-note-trash-separates-removal-from-deletion/acceptance-criteria:
+  en: fa7489a20927bdd1
+  zh: 5c521b08c8ce58e7
+/agent-note-trash-separates-removal-from-deletion/risks:
+  en: 23cb18d61ffd1f13
+  zh: b63b0aaa5c48b07c

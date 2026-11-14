@@ -1,0 +1,37 @@
+# Bilingual-pair consistency record for .agents/notes/proposed/feature/2026-11-14-canvas-graphs-and-operation-receipts.md ↔ .agents/notes/proposed/feature/2026-11-14-canvas-graphs-and-operation-receipts.zh.md: per heading
+# section, a hash of its English and Chinese blocks outside code blocks and generated regions.
+# After editing either side, bring the other along and re-record with:
+#   pnpm run verify-translation-pairing --write .agents/notes/proposed/feature/2026-11-14-canvas-graphs-and-operation-receipts.md
+/agent-note-a-canvas-edit-is-an-operation-with-a-receipt:
+  en: d67535c1f48e5ceb
+  zh: 2fa5dfb6dbdae9ee
+/agent-note-a-canvas-edit-is-an-operation-with-a-receipt/problem:
+  en: 6ceb18f2f54a53a0
+  zh: 5f696cebd5b6f966
+/agent-note-a-canvas-edit-is-an-operation-with-a-receipt/proposal:
+  en: 8b35b62f6cbb3dd9
+  zh: 2b697b5d4af6e9ec
+/agent-note-a-canvas-edit-is-an-operation-with-a-receipt/proposal/the-canvas-document:
+  en: 5264c32df82679b3
+  zh: fe67620bdc42015f
+/agent-note-a-canvas-edit-is-an-operation-with-a-receipt/proposal/edits:
+  en: 18f3cc48e26771a4
+  zh: 53ae22f0801a00a7
+/agent-note-a-canvas-edit-is-an-operation-with-a-receipt/proposal/calls-and-snapshots:
+  en: 3cb629e1519d3541
+  zh: cabfbff1cfd5f2f0
+/agent-note-a-canvas-edit-is-an-operation-with-a-receipt/proposal/tasks:
+  en: 1638b2709f85485f
+  zh: c99db8800fc2fd7f
+/agent-note-a-canvas-edit-is-an-operation-with-a-receipt/proposal/receipts:
+  en: dd3cbd339d64941b
+  zh: 3eac244ab078e970
+/agent-note-a-canvas-edit-is-an-operation-with-a-receipt/alternatives-considered:
+  en: 052259225b6d9be2
+  zh: 43046144a1546801
+/agent-note-a-canvas-edit-is-an-operation-with-a-receipt/acceptance-criteria:
+  en: 17ac5542978be0aa
+  zh: cd34d1c28b0470cc
+/agent-note-a-canvas-edit-is-an-operation-with-a-receipt/risks:
+  en: de01be6e86749cc3
+  zh: 41263e9184ff31a0

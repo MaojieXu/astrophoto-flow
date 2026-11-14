@@ -1,0 +1,423 @@
+import { every, filter, head, isEmpty, isEqual, map } from 'es-toolkit/compat'
+
+import type { ColorOption, LGraph } from '@/lib/litegraph/src/litegraph'
+import type { ExecutedWsMessage } from '@/platform/remote/comfyui/execution/types'
+import {
+  LGraphCanvas,
+  LGraphGroup,
+  LGraphNode,
+  LiteGraph,
+  isColorable
+} from '@/lib/litegraph/src/litegraph'
+import type {
+  ExportedSubgraph,
+  ISerialisableNodeInput,
+  ISerialisedGraph
+} from '@/lib/litegraph/src/types/serialisation'
+import type {
+  IBaseWidget,
+  IComboWidget,
+  WidgetCallbackOptions
+} from '@/lib/litegraph/src/types/widgets'
+import type { InputSpec } from '@/schemas/nodeDef/nodeDefSchemaV2'
+import { inputSpecTree } from '@/schemas/nodeDef/inputSpecTree'
+import { useToast } from '@/components/ui/toast/toastStore'
+import { useNodeZIndex } from '@/renderer/extensions/vueNodes/composables/useNodeZIndex'
+import { useApp } from '@/scripts/appInstance'
+import { t } from '@/i18n'
+import { parseNodeLocatorId } from '@/types/nodeIdentification'
+import type { SerializedNodeId } from '@/types/nodeId'
+import { UNASSIGNED_NODE_ID, parseNodeId } from '@/types/nodeId'
+import type { WidgetId } from '@/types/widgetId'
+import { ensureUniqueWidgetNames, widgetId } from '@/types/widgetId'
+
+type ImageNode = LGraphNode & { imgs: HTMLImageElement[] | undefined }
+type VideoNode = LGraphNode & {
+  videoContainer: HTMLElement | undefined
+  imgs: HTMLVideoElement[] | undefined
+}
+
+/**
+ * Extract & Promisify Litegraph.createNode to allow for positioning
+ * @param canvas
+ * @param name
+ */
+export async function createNode(
+  canvas: LGraphCanvas,
+  name: string
+): Promise<LGraphNode | null> {
+  if (!name) {
+    return null
+  }
+  if (isSelectOnly(canvas)) {
+    return null
+  }
+
+  const {
+    graph,
+    graph_mouse: [posX, posY]
+  } = canvas
+  const newNode = LiteGraph.createNode(name)
+  await new Promise((r) => setTimeout(r, 0))
+
+  if (newNode && graph) {
+    newNode.pos = [posX, posY]
+    const addedNode = graph.add(newNode) ?? null
+
+    if (addedNode) {
+      useNodeZIndex().bringNodeToFront(addedNode.id)
+      graph.change()
+    }
+    return addedNode
+  } else {
+    useToast().warning(t('assetBrowser.failedToCreateNode'))
+    return null
+  }
+}
+
+export function isImageNode(node: LGraphNode | undefined): node is ImageNode {
+  if (!node) return false
+  return (
+    node.previewMediaType === 'image' ||
+    (node.previewMediaType !== 'video' && !!node.imgs?.length)
+  )
+}
+
+export function isVideoNode(node: LGraphNode | undefined): node is VideoNode {
+  if (!node) return false
+  return node.previewMediaType === 'video' || !!node.videoContainer
+}
+
+/**
+ * Check if output data indicates animated content (animated webp/png or video).
+ */
+export function isAnimatedOutput(
+  output: Pick<ExecutedWsMessage['output'], 'animated'> | undefined
+): boolean {
+  return !!output?.animated?.find(Boolean)
+}
+
+/**
+ * Check if output data indicates video content (animated but not webp/png).
+ */
+export function isVideoOutput(
+  output: ExecutedWsMessage['output'] | undefined
+): boolean {
+  if (!isAnimatedOutput(output)) return false
+
+  const isAnimatedWebp = output?.images?.some((img) =>
+    img.filename?.endsWith('.webp')
+  )
+  const isAnimatedPng = output?.images?.some((img) =>
+    img.filename?.endsWith('.png')
+  )
+  return !isAnimatedWebp && !isAnimatedPng
+}
+
+export function isAudioNode(node: LGraphNode | undefined): boolean {
+  return !!node && node.previewMediaType === 'audio'
+}
+
+export function resolveComboValues(widget: IComboWidget): (string | number)[] {
+  const values = widget.options.values
+  if (typeof values === 'function') return values(widget)
+  if (Array.isArray(values)) return values
+  return Object.keys(values)
+}
+
+export function addToComboValues(
+  widget: Pick<IComboWidget, 'options'>,
+  value: string
+) {
+  const values = widget.options.values
+  if (Array.isArray(values) && !values.includes(value)) {
+    values.push(value)
+  }
+}
+
+/**
+ * True while the canvas is a picking surface rather than an editable one: its
+ * own `selectOnly` flag is set, or the interaction mode the application
+ * injected reads select-only (ADR-CANVAS-INTERACTION-0035).
+ *
+ * The canvas pointer and key dispatch and the command store read the mode
+ * themselves. The document-level paste, drop and history listeners guard with
+ * this helper, so a new document-level edit path has to opt in.
+ */
+export const isSelectOnly = (canvas: LGraphCanvas | undefined): boolean =>
+  canvas?.selectOnly === true
+
+export const isLGraphNode = (item: unknown): item is LGraphNode => {
+  return item instanceof LGraphNode
+}
+
+export const isLGraphGroup = (item: unknown): item is LGraphGroup => {
+  return item instanceof LGraphGroup
+}
+
+/**
+ * Get the color option of all canvas items if they are all the same.
+ * @param items - The items to get the color option of.
+ * @returns The color option of the item.
+ */
+export const getItemsColorOption = (items: unknown[]): ColorOption | null => {
+  const validItems = filter(items, isColorable)
+  if (isEmpty(validItems)) return null
+
+  const colorOptions = map(validItems, (item) => item.getColorOption())
+
+  return every(colorOptions, (option) => isEqual(option, head(colorOptions)))
+    ? head(colorOptions)!
+    : null
+}
+
+export function executeWidgetsCallback(
+  nodes: LGraphNode[],
+  callbackName: 'onRemove' | 'beforeQueued' | 'afterQueued',
+  options?: WidgetCallbackOptions
+) {
+  for (const node of nodes) {
+    for (const widget of node.widgets ?? []) {
+      widget[callbackName]?.(options)
+    }
+  }
+}
+
+/**
+ * Since frontend version 1.16, forceInput input is no longer treated
+ * as widget. So we need to remove the dummy widget value serialized
+ * from workflows prior to v1.16.
+ * Ref: https://github.com/Comfy-Org/ComfyUI_frontend/pull/3326
+ *
+ * @param nodeDef the node definition
+ * @param widgets the widgets on the node instance (from node definition)
+ * @param widgetsValues the widgets values to populate the node during configuration
+ * @returns the widgets values without the dummy widget values
+ */
+export function migrateWidgetsValues<TWidgetValue>(
+  inputDefs: Record<string, InputSpec>,
+  widgets: IBaseWidget[],
+  widgetsValues: TWidgetValue[]
+): TWidgetValue[] {
+  if (
+    Object.values(inputDefs).some((input) =>
+      inputSpecTree(input).some((spec) => spec.type === 'COMFY_DYNAMICGROUP_V3')
+    )
+  )
+    return widgetsValues
+
+  const widgetNames = new Set(widgets.map((w) => w.name))
+  const originalWidgetsInputs = Object.values(inputDefs).filter(
+    (input) => widgetNames.has(input.name) || input.forceInput
+  )
+  const skippedWidgetNames = new Set(
+    map(
+      filter(widgets, (widget) => widget.serialize === false),
+      (widget) => widget.name
+    )
+  )
+
+  const widgetIndexHasForceInput = originalWidgetsInputs.flatMap((input) => {
+    if (skippedWidgetNames.has(input.name)) return []
+    return input.control_after_generate
+      ? [!!input.forceInput, false]
+      : [!!input.forceInput]
+  })
+
+  const serializableWidgetCount = filter(
+    widgets,
+    (widget) => widget.serialize !== false
+  ).length
+  if (
+    !widgetIndexHasForceInput.includes(true) &&
+    widgetsValues.length === serializableWidgetCount
+  ) {
+    return widgetsValues
+  }
+
+  const compactedWidgetValues = filter(
+    widgetsValues,
+    (_, index) => widgets[index]?.serialize !== false
+  )
+  const alignedWidgetValues =
+    compactedWidgetValues.length === widgetIndexHasForceInput.length
+      ? compactedWidgetValues
+      : widgetsValues.length === widgetIndexHasForceInput.length
+        ? widgetsValues
+        : undefined
+
+  if (!alignedWidgetValues) return widgetsValues
+
+  return filter(
+    alignedWidgetValues,
+    (_, index) => !widgetIndexHasForceInput[index]
+  )
+}
+
+/**
+ * Compress widget input slots by removing all unconnected widget input slots.
+ * This should match the serialization format of legacy widget conversion.
+ *
+ * @param graph - The graph to compress widget input slots for.
+ * @throws If an infinite loop is detected.
+ */
+export function compressWidgetInputSlots(graph: ISerialisedGraph) {
+  for (const node of graph.nodes) {
+    node.inputs = node.inputs?.filter(matchesLegacyApi)
+
+    for (const [inputIndex, input] of node.inputs?.entries() ?? []) {
+      if (input.link) {
+        const link = graph.links.find((link) => link[0] === input.link)
+        if (link) {
+          link[4] = inputIndex
+        }
+      }
+    }
+  }
+
+  compressSubgraphWidgetInputSlots(graph.definitions?.subgraphs)
+}
+
+function matchesLegacyApi(input: ISerialisableNodeInput) {
+  return !(input.widget && input.link === null && !input.label)
+}
+
+/**
+ * Duplication to handle the legacy link arrays in the root workflow.
+ * @see compressWidgetInputSlots
+ * @param subgraph The subgraph to compress widget input slots for.
+ */
+function compressSubgraphWidgetInputSlots(
+  subgraphs: ExportedSubgraph[] | undefined,
+  visited = new WeakSet<ExportedSubgraph>()
+) {
+  if (!subgraphs) return
+
+  for (const subgraph of subgraphs) {
+    if (visited.has(subgraph)) throw new Error('Infinite loop detected')
+    visited.add(subgraph)
+
+    if (subgraph.nodes) {
+      for (const node of subgraph.nodes) {
+        node.inputs = node.inputs?.filter(matchesLegacyApi)
+
+        if (!subgraph.links) continue
+
+        for (const [inputIndex, input] of node.inputs?.entries() ?? []) {
+          if (input.link) {
+            const link = subgraph.links.find((link) => link.id === input.link)
+            if (link) link.target_slot = inputIndex
+          }
+        }
+      }
+    }
+
+    compressSubgraphWidgetInputSlots(subgraph.definitions?.subgraphs, visited)
+  }
+}
+
+export function getLinkTypeColor(typeName: string): string {
+  return LGraphCanvas.link_type_colors[typeName] ?? LiteGraph.LINK_COLOR
+}
+
+export function resolveNode(
+  nodeId: SerializedNodeId,
+  graph: LGraph | null | undefined = useApp().rootGraph
+): LGraphNode | undefined {
+  const parsedNodeId = parseNodeId(nodeId)
+  if (!graph || !parsedNodeId) return undefined
+  const found = graph.getNodeById(parsedNodeId)
+  if (found) return found
+  for (const sg of graph.subgraphs.values()) {
+    const node = sg.getNodeById(parsedNodeId)
+    if (node) return node
+  }
+  return undefined
+}
+export function resolveNodeWidget(
+  nodeId: SerializedNodeId,
+  widgetName?: string,
+  graph: LGraph = useApp().rootGraph
+): [LGraphNode, IBaseWidget] | [LGraphNode] | [] {
+  if (widgetName && typeof nodeId === 'string') {
+    const locator = parseNodeLocatorId(nodeId)
+    if (locator?.subgraphUuid) {
+      const host = graph.getNodeById(locator.localNodeId)
+      if (host?.isSubgraphNode()) {
+        const widget = host.widgets.find((w) => w.name === widgetName)
+        return widget ? [host, widget] : []
+      }
+    }
+  }
+
+  const parsedNodeId = parseNodeId(nodeId)
+  if (!parsedNodeId) return []
+
+  const node = graph.getNodeById(parsedNodeId)
+  if (!widgetName) return node ? [node] : []
+  if (node) {
+    const widget = node.widgets?.find((w) => w.name === widgetName)
+    return widget ? [node, widget] : []
+  }
+
+  return []
+}
+
+export function getWidgetIdForNode(
+  node: LGraphNode,
+  widget: Pick<IBaseWidget, 'name' | 'widgetId'>
+): WidgetId | undefined {
+  if (widget.widgetId) return widget.widgetId
+  const graphId = node.graph?.rootGraph.id
+  const nodeId = parseNodeId(node.id)
+  if (!graphId || !nodeId || nodeId === UNASSIGNED_NODE_ID) return undefined
+  const liveEntry = [...mapLiveWidgetsById(node)].find(
+    ([, candidate]) => candidate === widget
+  )
+  if (liveEntry) return liveEntry[0]
+  return widgetId(graphId, nodeId, widget.name)
+}
+
+/**
+ * Maps a node's live widgets to their {@link WidgetId}. Building the map once
+ * lets callers resolve widgets by id in O(1) instead of rescanning.
+ */
+export function mapLiveWidgetsById(
+  node: LGraphNode
+): Map<WidgetId, IBaseWidget> {
+  const byId = new Map<WidgetId, IBaseWidget>()
+  const widgets = node.widgets ?? []
+  const distinctWidgets = [...new Set(widgets)]
+  const namesAreUnique = ensureUniqueWidgetNames(distinctWidgets)
+  const graphId = node.graph?.rootGraph.id
+  const nodeId = parseNodeId(node.id)
+  const usedNames = new Set<string>()
+  const reservedNames = new Set(distinctWidgets.map(({ name }) => name))
+  for (const widget of distinctWidgets) {
+    let name = widget.name
+    if (!namesAreUnique && usedNames.has(name)) {
+      let suffix = 1
+      while (
+        usedNames.has(`${name}#${suffix}`) ||
+        reservedNames.has(`${name}#${suffix}`)
+      ) {
+        suffix++
+      }
+      name = `${name}#${suffix}`
+    }
+    usedNames.add(name)
+    const id =
+      widget.widgetId ??
+      (graphId && nodeId && nodeId !== UNASSIGNED_NODE_ID
+        ? widgetId(graphId, nodeId, name)
+        : undefined)
+    if (id) byId.set(id, widget)
+  }
+  return byId
+}
+
+export function isLoad3dNode(node: LGraphNode) {
+  return (
+    node.type && (node.type === 'Load3D' || node.type === 'Load3DAnimation')
+  )
+}

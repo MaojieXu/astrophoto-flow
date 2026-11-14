@@ -1,0 +1,864 @@
+import { tryOnScopeDispose, useEventListener } from '@vueuse/core'
+import type { Fn } from '@vueuse/core'
+
+import { useSharedCanvasPositionConversion } from '@/composables/element/useCanvasPositionConversion'
+import { AutoPanController } from '@/renderer/core/canvas/useAutoPan'
+import type { LGraph } from '@/lib/litegraph/src/LGraph'
+import type { LGraphNode } from '@/lib/litegraph/src/LGraphNode'
+import { LLink, slotFloatingLinks } from '@/lib/litegraph/src/LLink'
+import type { Reroute } from '@/lib/litegraph/src/Reroute'
+import type { RenderLink } from '@/lib/litegraph/src/canvas/RenderLink'
+import type {
+  INodeInputSlot,
+  INodeOutputSlot
+} from '@/lib/litegraph/src/types/slots'
+import { LinkDirection } from '@/lib/litegraph/src/types/globalEnums'
+import {
+  clearCanvasPointerHistory,
+  toCanvasPointerEvent
+} from '@/renderer/core/canvas/interaction/canvasPointerEvent'
+import { createLinkConnectorAdapter } from '@/renderer/core/canvas/links/linkConnectorAdapter'
+import type { LinkConnectorAdapter } from '@/renderer/core/canvas/links/linkConnectorAdapter'
+import { getGraphSlotLayout } from '@/renderer/core/canvas/litegraph/slotCalculations'
+import {
+  resolveNodeSurfaceSlotCandidate,
+  resolveSlotTargetCandidate
+} from '@/renderer/core/canvas/links/linkDropOrchestrator'
+import { useCanvasStore } from '@/renderer/core/canvas/canvasStore'
+import { isLinkRevealed } from '@/lib/litegraph/src/canvas/linkRevealState'
+import { useSlotLinkDragUIState } from '@/renderer/core/canvas/links/slotLinkDragUIState'
+import type { SlotDropCandidate } from '@/renderer/core/canvas/links/slotLinkDragUIState'
+import { getSlotKey } from '@/renderer/core/layout/slots/slotIdentifier'
+import { useWorkflowStore } from '@/platform/workflow/management/stores/workflowStore'
+import { layoutStore } from '@/renderer/core/layout/store/layoutStore'
+import type { Point } from '@/renderer/core/layout/types'
+import { toPoint } from '@/renderer/core/layout/utils/geometry'
+import { createSlotLinkDragContext } from '@/renderer/extensions/vueNodes/composables/slotLinkDragContext'
+import { augmentToCanvasPointerEvent } from '@/renderer/extensions/vueNodes/utils/eventUtils'
+import { app } from '@/scripts/app'
+import { inputLink } from '@/lib/litegraph/src/node/slotLinks'
+import { useLinkPresentationStore } from '@/stores/linkPresentationStore'
+import { useLinkStore } from '@/stores/linkStore'
+import { graphScopeOf } from '@/types/graphScopeId'
+import { UNASSIGNED_NODE_ID, toNodeId } from '@/types/nodeId'
+import type { NodeId } from '@/types/nodeId'
+import { createRafBatch } from '@/utils/rafBatch'
+
+interface SlotInteractionOptions {
+  nodeId?: NodeId
+  index: number
+  type: 'input' | 'output'
+}
+
+interface SlotInteractionHandlers {
+  onClick: (event: PointerEvent) => void
+  onDoubleClick: (event: PointerEvent) => void
+  onPointerDown: (event: PointerEvent) => void
+}
+
+interface PointerSession {
+  begin: (pointerId: number) => void
+  register: (...stops: Array<Fn | null | undefined>) => void
+  matches: (event: PointerEvent) => boolean
+  isActive: () => boolean
+  clear: () => void
+}
+
+function createPointerSession(): PointerSession {
+  let pointerId: number | null = null
+  let stops: Fn[] = []
+
+  const begin = (id: number) => {
+    pointerId = id
+  }
+
+  const register = (...newStops: Array<Fn | null | undefined>) => {
+    for (const stop of newStops) {
+      if (typeof stop === 'function') {
+        stops.push(stop)
+      }
+    }
+  }
+
+  const matches = (event: PointerEvent) =>
+    pointerId !== null && event.pointerId === pointerId
+
+  const isActive = () => pointerId !== null
+
+  const clear = () => {
+    for (const stop of stops) {
+      stop()
+    }
+    stops = []
+    pointerId = null
+  }
+
+  return { begin, register, matches, isActive, clear }
+}
+
+/**
+ * Resolves the actual DOM element under the pointer position.
+ *
+ * On touch/mobile devices, pointer events have "implicit pointer capture" -
+ * event.target stays as the element where the touch started, not the element
+ * currently under the pointer. This helper uses document.elementFromPoint()
+ * to get the actual element under the pointer, falling back to the provided
+ * fallback target if elementFromPoint returns null.
+ *
+ * @param clientX - The client X coordinate of the pointer
+ * @param clientY - The client Y coordinate of the pointer
+ * @param fallback - Fallback target to use if elementFromPoint returns null
+ * @returns The resolved target element
+ */
+export function resolvePointerTarget(
+  clientX: number,
+  clientY: number,
+  fallback: EventTarget | null
+): EventTarget | null {
+  return document.elementFromPoint(clientX, clientY) ?? fallback
+}
+
+export function isRerouteVisibleForLinkDrag(
+  graph: Pick<LGraph, 'getLink' | 'id' | 'rootGraph'>,
+  reroute: Pick<Reroute, 'linkIds' | 'floatingLinkIds'>
+): boolean {
+  if (reroute.linkIds.size === 0 || reroute.floatingLinkIds.size > 0)
+    return true
+
+  const scope = graphScopeOf(graph)
+  for (const linkId of reroute.linkIds) {
+    const link = graph.getLink(linkId)
+    const hidden =
+      link && useLinkPresentationStore().getPresentation(scope, linkId)?.hidden
+    if (!hidden || isLinkRevealed(scope.rootGraphId, linkId)) {
+      return true
+    }
+  }
+  return false
+}
+
+export function useSlotLinkInteraction({
+  nodeId,
+  index,
+  type
+}: SlotInteractionOptions): SlotInteractionHandlers {
+  const {
+    state,
+    beginDrag,
+    endDrag,
+    updatePointerPosition,
+    setCandidate,
+    setCompatibleForKey,
+    clearCompatible
+  } = useSlotLinkDragUIState()
+  const canvasStore = useCanvasStore()
+  const conversion = useSharedCanvasPositionConversion()
+  const pointerSession = createPointerSession()
+  let activeAdapter: LinkConnectorAdapter | null = null
+  let autoPan: AutoPanController | null = null
+
+  // Per-drag drag-state context (non-reactive caches + RAF batching)
+  const dragContext = createSlotLinkDragContext()
+
+  const resolveRenderLinkSource = (link: RenderLink): Point | null => {
+    if (link.fromReroute) {
+      const graphId = app.canvas.graph?.rootGraph.id
+      const rerouteLayout = graphId
+        ? layoutStore.getRerouteLayout(graphId, link.fromReroute.id)
+        : null
+      if (rerouteLayout) return rerouteLayout.position
+      const [x, y] = link.fromReroute.pos
+      return toPoint(x, y)
+    }
+
+    const nodeId = link.node.id
+    const isInputFrom = link.toType === 'output'
+    const graph = app.canvas.graph
+    const layout = graph
+      ? getGraphSlotLayout(graph, nodeId, link.fromSlotIndex, isInputFrom)
+      : null
+    if (layout) return layout.position
+
+    const pos = link.fromPos
+    return toPoint(pos[0], pos[1])
+  }
+
+  const syncRenderLinkOrigins = () => {
+    if (!activeAdapter) return
+    for (const link of activeAdapter.renderLinks) {
+      const origin = resolveRenderLinkSource(link)
+      if (!origin) continue
+      const x = origin.x
+      const y = origin.y
+      if (link.fromPos[0] !== x || link.fromPos[1] !== y) {
+        link.fromPos[0] = x
+        link.fromPos[1] = y
+      }
+    }
+  }
+
+  function hasCanConnectToReroute(
+    link: RenderLink
+  ): link is RenderLink & { canConnectToReroute: (r: Reroute) => boolean } {
+    return 'canConnectToReroute' in link
+  }
+
+  type ToInputLink = RenderLink & { toType: 'input' }
+  type ToOutputLink = RenderLink & { toType: 'output' }
+  const isToInputLink = (link: RenderLink): link is ToInputLink =>
+    link.toType === 'input'
+  const isToOutputLink = (link: RenderLink): link is ToOutputLink =>
+    link.toType === 'output'
+
+  function connectLinksToInput(
+    links: ReadonlyArray<RenderLink>,
+    node: LGraphNode,
+    inputSlot: INodeInputSlot
+  ): boolean {
+    const validCandidates = links
+      .filter(isToInputLink)
+      .filter((link) => link.canConnectToInput(node, inputSlot))
+
+    for (const link of validCandidates) {
+      link.connectToInput(node, inputSlot, activeAdapter?.linkConnector.events)
+    }
+
+    return validCandidates.length > 0
+  }
+
+  function connectLinksToOutput(
+    links: ReadonlyArray<RenderLink>,
+    node: LGraphNode,
+    outputSlot: INodeOutputSlot
+  ): boolean {
+    const validCandidates = links
+      .filter(isToOutputLink)
+      .filter((link) => link.canConnectToOutput(node, outputSlot))
+
+    for (const link of validCandidates) {
+      link.connectToOutput(
+        node,
+        outputSlot,
+        activeAdapter?.linkConnector.events
+      )
+    }
+
+    return validCandidates.length > 0
+  }
+
+  const resolveLinkOrigin = (
+    link: LLink | undefined
+  ): { position: Point; direction: LinkDirection } | null => {
+    if (!link) return null
+    if (link.origin_id === UNASSIGNED_NODE_ID) return null
+
+    const graph = app.canvas.graph
+    const layout = graph
+      ? getGraphSlotLayout(graph, link.origin_id, link.origin_slot, false)
+      : null
+    if (!layout) return null
+
+    return { position: { ...layout.position }, direction: LinkDirection.NONE }
+  }
+
+  const resolveExistingInputLinkAnchor = (
+    graph: LGraph,
+    nodeId: NodeId,
+    slotIndex: number,
+    inputSlot: INodeInputSlot | undefined
+  ): { position: Point; direction: LinkDirection } | null => {
+    if (!inputSlot) return null
+
+    const directLink = inputLink(graph, nodeId, slotIndex)
+    if (directLink) {
+      const reroutes = LLink.getReroutes(graph, directLink)
+      const lastReroute = reroutes.at(-1)
+      if (lastReroute) {
+        const rerouteLayout = layoutStore.getRerouteLayout(
+          graph.rootGraph.id,
+          lastReroute.id
+        )
+        if (rerouteLayout) {
+          return {
+            position: { ...rerouteLayout.position },
+            direction: LinkDirection.NONE
+          }
+        }
+
+        const pos = lastReroute.pos
+        return {
+          position: toPoint(pos[0], pos[1]),
+          direction: LinkDirection.NONE
+        }
+      }
+
+      const directAnchor = resolveLinkOrigin(directLink)
+      if (directAnchor) return directAnchor
+    }
+
+    const floatingLink = slotFloatingLinks(
+      graph,
+      'input',
+      nodeId,
+      slotIndex
+    ).at(0)
+    if (!floatingLink) return null
+
+    if (floatingLink.parentId != null) {
+      const rerouteLayout = layoutStore.getRerouteLayout(
+        graph.rootGraph.id,
+        floatingLink.parentId
+      )
+      if (rerouteLayout) {
+        return {
+          position: { ...rerouteLayout.position },
+          direction: LinkDirection.NONE
+        }
+      }
+
+      const reroute = graph.getReroute(floatingLink.parentId)
+      if (reroute) {
+        return {
+          position: toPoint(reroute.pos[0], reroute.pos[1]),
+          direction: LinkDirection.NONE
+        }
+      }
+    }
+
+    return null
+  }
+
+  const cleanupInteraction = () => {
+    autoPan?.stop()
+    autoPan = null
+    if (state.pointerId != null) {
+      clearCanvasPointerHistory(state.pointerId)
+    }
+    activeAdapter?.reset()
+    pointerSession.clear()
+    endDrag()
+    activeAdapter = null
+    raf.cancel()
+    dragContext.dispose()
+    clearCompatible()
+  }
+
+  const updatePointerState = (event: PointerEvent) => {
+    const clientX = event.clientX
+    const clientY = event.clientY
+    const [canvasX, canvasY] = conversion.clientPosToCanvasPos([
+      clientX,
+      clientY
+    ])
+
+    updatePointerPosition(clientX, clientY, canvasX, canvasY)
+  }
+
+  const processPointerMoveFrame = () => {
+    const data = dragContext.pendingPointerMove
+    if (!data) return
+    dragContext.pendingPointerMove = null
+
+    const [canvasX, canvasY] = conversion.clientPosToCanvasPos([
+      data.clientX,
+      data.clientY
+    ])
+    updatePointerPosition(data.clientX, data.clientY, canvasX, canvasY)
+
+    syncRenderLinkOrigins()
+
+    let hoveredSlotKey: string | null = null
+    let hoveredNodeId: NodeId | null = null
+    const target = resolvePointerTarget(data.clientX, data.clientY, data.target)
+    if (target === dragContext.lastPointerEventTarget) {
+      hoveredSlotKey = dragContext.lastPointerTargetSlotKey
+      hoveredNodeId = dragContext.lastPointerTargetNodeId
+    } else if (target instanceof HTMLElement) {
+      const elWithSlot = target
+        .closest('.lg-slot, .lg-node-widget')
+        ?.querySelector<HTMLElement>('[data-slot-key]')
+      const elWithNode = target.closest<HTMLElement>('[data-node-id]')
+      hoveredSlotKey = elWithSlot?.dataset['slotKey'] ?? null
+      hoveredNodeId = elWithNode?.dataset['nodeId']
+        ? toNodeId(elWithNode.dataset['nodeId'])
+        : null
+      dragContext.lastPointerEventTarget = target
+      dragContext.lastPointerTargetSlotKey = hoveredSlotKey
+      dragContext.lastPointerTargetNodeId = hoveredNodeId
+    }
+
+    const hoverChanged =
+      hoveredSlotKey !== dragContext.lastHoverSlotKey ||
+      hoveredNodeId !== dragContext.lastHoverNodeId
+
+    let candidate: SlotDropCandidate | null = state.candidate
+
+    if (hoverChanged) {
+      const adapter = activeAdapter
+      const graph = app.canvas.graph ?? null
+      const context = { adapter, graph, session: dragContext }
+      const slotCandidate = resolveSlotTargetCandidate(target, context)
+      const nodeCandidate = resolveNodeSurfaceSlotCandidate(target, context)
+      candidate = slotCandidate?.compatible ? slotCandidate : nodeCandidate
+      dragContext.lastHoverSlotKey = hoveredSlotKey
+      dragContext.lastHoverNodeId = hoveredNodeId
+
+      if (slotCandidate) {
+        const key = getSlotKey(
+          slotCandidate.layout.nodeId,
+          slotCandidate.layout.index,
+          slotCandidate.layout.type === 'input'
+        )
+        setCompatibleForKey(key, slotCandidate.compatible)
+      }
+      if (nodeCandidate && !slotCandidate?.compatible) {
+        const key = getSlotKey(
+          nodeCandidate.layout.nodeId,
+          nodeCandidate.layout.index,
+          nodeCandidate.layout.type === 'input'
+        )
+        setCompatibleForKey(key, nodeCandidate.compatible)
+      }
+    }
+
+    const newCandidate = candidate?.compatible ? candidate : null
+    const newCandidateKey = newCandidate
+      ? getSlotKey(
+          newCandidate.layout.nodeId,
+          newCandidate.layout.index,
+          newCandidate.layout.type === 'input'
+        )
+      : null
+
+    const candidateChanged = newCandidateKey !== dragContext.lastCandidateKey
+    if (candidateChanged) {
+      setCandidate(newCandidate)
+      dragContext.lastCandidateKey = newCandidateKey
+    }
+
+    let snapPosChanged = false
+    if (activeAdapter) {
+      const snapX = newCandidate
+        ? newCandidate.layout.position.x
+        : state.pointer.canvas.x
+      const snapY = newCandidate
+        ? newCandidate.layout.position.y
+        : state.pointer.canvas.y
+      const currentSnap = activeAdapter.linkConnector.state.snapLinksPos
+      snapPosChanged =
+        !currentSnap || currentSnap[0] !== snapX || currentSnap[1] !== snapY
+      if (snapPosChanged) {
+        activeAdapter.linkConnector.state.snapLinksPos = [snapX, snapY]
+      }
+    }
+
+    const shouldRedraw = candidateChanged || snapPosChanged
+    if (shouldRedraw) app.canvas.setDirty(true, true)
+  }
+  const raf = createRafBatch(processPointerMoveFrame)
+
+  const canvas = app.canvas
+  const node = nodeId ? canvas.graph?.getNodeById(nodeId) : null
+  const handlePointerMove = (event: PointerEvent) => {
+    if (!pointerSession.matches(event) || canvasStore.isReadOnly) return
+
+    event.stopPropagation()
+
+    app.canvas.last_mouse = [event.clientX, event.clientY]
+    autoPan?.updatePointer(event.clientX, event.clientY)
+
+    if (canvas.subgraph && node) {
+      augmentToCanvasPointerEvent(event, node, canvas)
+      canvas.subgraph.inputNode.onPointerMove(event)
+      canvas.subgraph.outputNode.onPointerMove(event)
+    }
+
+    dragContext.pendingPointerMove = {
+      clientX: event.clientX,
+      clientY: event.clientY,
+      target: event.target
+    }
+    raf.schedule()
+  }
+
+  // Attempt to finalize by connecting to a DOM slot candidate
+  const tryConnectToCandidate = (
+    candidate: SlotDropCandidate | null
+  ): boolean => {
+    if (!candidate?.compatible) return false
+    const graph = app.canvas.graph
+    const adapter = activeAdapter
+    if (!graph || !adapter) return false
+
+    const nodeId: NodeId = candidate.layout.nodeId
+    const targetNode = graph.getNodeById(nodeId)
+    if (!targetNode) return false
+
+    if (candidate.layout.type === 'input') {
+      const inputSlot = targetNode.inputs.at(candidate.layout.index)
+      return (
+        !!inputSlot &&
+        connectLinksToInput(adapter.renderLinks, targetNode, inputSlot)
+      )
+    }
+
+    const outputSlot = targetNode.outputs.at(candidate.layout.index)
+    return (
+      !!outputSlot &&
+      connectLinksToOutput(adapter.renderLinks, targetNode, outputSlot)
+    )
+  }
+
+  // Attempt to finalize by dropping on a reroute under the pointer
+  const tryConnectViaRerouteAtPointer = (): boolean => {
+    const graph = app.canvas.graph
+    const adapter = activeAdapter
+    if (!graph || !adapter) return false
+
+    const rerouteLayout = layoutStore.queryRerouteAtPoint(graph.rootGraph.id, {
+      x: state.pointer.canvas.x,
+      y: state.pointer.canvas.y
+    })
+    if (!rerouteLayout) return false
+
+    const reroute = graph.getReroute(rerouteLayout.id)
+    if (
+      !reroute ||
+      !isRerouteVisibleForLinkDrag(graph, reroute) ||
+      !adapter.isRerouteValidDrop(reroute.id)
+    ) {
+      return false
+    }
+
+    let didConnect = false
+
+    const results = reroute.findTargetInputs() ?? []
+    const maybeReroutes = reroute.getReroutes()
+    if (results.length && maybeReroutes !== null) {
+      const originalReroutes = maybeReroutes.slice(0, -1).reverse()
+      for (const link of adapter.renderLinks) {
+        if (!isToInputLink(link)) continue
+        for (const result of results) {
+          link.connectToRerouteInput(
+            reroute,
+            result,
+            adapter.linkConnector.events,
+            originalReroutes
+          )
+          didConnect = true
+        }
+      }
+    }
+
+    const sourceOutput = reroute.findSourceOutput()
+    if (sourceOutput) {
+      const { node, output } = sourceOutput
+      for (const link of adapter.renderLinks) {
+        if (!isToOutputLink(link)) continue
+        if (hasCanConnectToReroute(link) && !link.canConnectToReroute(reroute))
+          continue
+        link.connectToRerouteOutput(
+          reroute,
+          node,
+          output,
+          adapter.linkConnector.events
+        )
+        didConnect = true
+      }
+    }
+
+    return didConnect
+  }
+
+  const finishInteraction = (event: PointerEvent) => {
+    if (!pointerSession.matches(event)) return
+    const canvasEvent = toCanvasPointerEvent(event)
+    canvasEvent.preventDefault()
+
+    raf.flush()
+
+    if (!state.source) {
+      cleanupInteraction()
+      app.canvas.setDirty(true, true)
+      return
+    }
+
+    const snappedCandidate = state.candidate?.compatible
+      ? state.candidate
+      : null
+
+    const dropTarget = resolvePointerTarget(
+      event.clientX,
+      event.clientY,
+      canvasEvent.target
+    )
+    const hasConnected = connectByPriority(dropTarget, snappedCandidate)
+
+    if (!hasConnected && dropTarget === app.canvas.canvas) {
+      activeAdapter?.dropOnCanvas(canvasEvent)
+    }
+
+    cleanupInteraction()
+    app.canvas.setDirty(true, true)
+    useWorkflowStore().activeWorkflow?.changeTracker.captureCanvasState()
+  }
+
+  const handlePointerUp = (event: PointerEvent) => {
+    event.stopPropagation()
+    finishInteraction(event)
+  }
+
+  const handlePointerCancel = (event: PointerEvent) => {
+    if (!pointerSession.matches(event)) return
+
+    raf.flush()
+    toCanvasPointerEvent(event)
+    cleanupInteraction()
+    app.canvas.setDirty(true, true)
+  }
+
+  function connectByPriority(
+    target: EventTarget | null,
+    snappedCandidate: SlotDropCandidate | null
+  ): boolean {
+    const adapter = activeAdapter
+    const graph = app.canvas.graph ?? null
+    const context = { adapter, graph, session: dragContext }
+
+    const domSlotCandidate = resolveSlotTargetCandidate(target, context)
+    const nodeSurfaceSlotCandidate = resolveNodeSurfaceSlotCandidate(
+      target,
+      context
+    )
+
+    return (
+      tryConnectToCandidate(snappedCandidate) ||
+      tryConnectToCandidate(domSlotCandidate) ||
+      tryConnectToCandidate(nodeSurfaceSlotCandidate) ||
+      tryConnectViaRerouteAtPointer()
+    )
+  }
+
+  const onPointerDown = (event: PointerEvent) => {
+    if (event.button !== 0) return
+    if (!nodeId) return
+    if (pointerSession.isActive()) return
+    event.preventDefault()
+    event.stopPropagation()
+
+    const canvas = app.canvas
+    const graph = canvas.graph
+    if (!graph) return
+
+    activeAdapter = createLinkConnectorAdapter()
+    if (!activeAdapter) return
+    raf.cancel()
+    dragContext.reset()
+
+    const layout = getGraphSlotLayout(graph, nodeId, index, type === 'input')
+    if (!layout) return
+
+    const localNodeId: NodeId = nodeId
+    const isInputSlot = type === 'input'
+    const isOutputSlot = type === 'output'
+
+    const resolvedNode = graph.getNodeById(localNodeId)
+    const inputSlot = isInputSlot ? resolvedNode?.inputs[index] : undefined
+    const outputSlot = isOutputSlot ? resolvedNode?.outputs[index] : undefined
+
+    const ctrlOrMeta = event.ctrlKey || event.metaKey
+
+    const existingInputLink = isInputSlot
+      ? inputLink(graph, localNodeId, index)
+      : undefined
+    const inputFloatingCount = isInputSlot
+      ? slotFloatingLinks(graph, 'input', localNodeId, index).length
+      : 0
+    const hasExistingInputLink =
+      existingInputLink !== undefined || inputFloatingCount > 0
+
+    const hasExistingOutputLink =
+      isOutputSlot &&
+      (useLinkStore().isOutputSlotConnected(
+        graphScopeOf(graph),
+        localNodeId,
+        index
+      ) ||
+        slotFloatingLinks(graph, 'output', localNodeId, index).length > 0)
+
+    const shouldBreakExistingInputLink =
+      isInputSlot &&
+      hasExistingInputLink &&
+      ctrlOrMeta &&
+      event.altKey &&
+      !event.shiftKey
+
+    const shouldBatchDisconnectOutputLinks =
+      isOutputSlot &&
+      hasExistingOutputLink &&
+      ctrlOrMeta &&
+      event.altKey &&
+      !event.shiftKey
+
+    if (shouldBreakExistingInputLink && resolvedNode) {
+      resolvedNode.disconnectInput(index, true)
+    }
+
+    if (shouldBatchDisconnectOutputLinks && resolvedNode) {
+      resolvedNode.disconnectOutput(index)
+      canvas.setDirty(true, true)
+      event.preventDefault()
+      event.stopPropagation()
+      return
+    }
+
+    const baseDirection = isInputSlot
+      ? (inputSlot?.dir ?? LinkDirection.LEFT)
+      : (outputSlot?.dir ?? LinkDirection.RIGHT)
+
+    const existingAnchor =
+      isInputSlot && !shouldBreakExistingInputLink
+        ? resolveExistingInputLinkAnchor(graph, localNodeId, index, inputSlot)
+        : null
+
+    const shouldMoveExistingOutput =
+      isOutputSlot && event.shiftKey && hasExistingOutputLink
+
+    const shouldMoveExistingInput =
+      isInputSlot && !shouldBreakExistingInputLink && hasExistingInputLink
+
+    if (isOutputSlot) {
+      activeAdapter.beginFromOutput(localNodeId, index, {
+        moveExisting: shouldMoveExistingOutput
+      })
+    } else {
+      activeAdapter.beginFromInput(localNodeId, index, {
+        moveExisting: shouldMoveExistingInput,
+        layout
+      })
+    }
+
+    if (shouldMoveExistingInput && existingInputLink) {
+      existingInputLink._dragging = true
+    }
+
+    syncRenderLinkOrigins()
+
+    const direction = existingAnchor?.direction ?? baseDirection
+    const startPosition = existingAnchor?.position ?? {
+      x: layout.position.x,
+      y: layout.position.y
+    }
+
+    beginDrag(
+      {
+        nodeId,
+        slotIndex: index,
+        type,
+        direction,
+        position: startPosition,
+        linkId: !shouldBreakExistingInputLink
+          ? existingInputLink?.id
+          : undefined,
+        movingExistingOutput: shouldMoveExistingOutput
+      },
+      event.pointerId
+    )
+
+    pointerSession.begin(event.pointerId)
+
+    toCanvasPointerEvent(event)
+    updatePointerState(event)
+
+    activeAdapter.linkConnector.state.snapLinksPos = [
+      state.pointer.canvas.x,
+      state.pointer.canvas.y
+    ]
+
+    pointerSession.register(
+      useEventListener('pointermove', handlePointerMove, {
+        capture: true
+      }),
+      useEventListener('pointerup', handlePointerUp, {
+        capture: true
+      }),
+      useEventListener('pointercancel', handlePointerCancel, {
+        capture: true
+      })
+    )
+    const targetType: 'input' | 'output' = type === 'input' ? 'output' : 'input'
+    clearCompatible()
+    for (const candidateNode of graph.nodes) {
+      const slots =
+        targetType === 'input' ? candidateNode.inputs : candidateNode.outputs
+      for (const [slotIndex] of slots.entries()) {
+        const key = getSlotKey(
+          candidateNode.id,
+          slotIndex,
+          targetType === 'input'
+        )
+        const compatible =
+          targetType === 'input'
+            ? activeAdapter.isInputValidDrop(candidateNode.id, slotIndex)
+            : activeAdapter.isOutputValidDrop(candidateNode.id, slotIndex)
+        setCompatibleForKey(key, compatible)
+      }
+    }
+    autoPan = new AutoPanController({
+      canvas: canvas.canvas,
+      ds: canvas.ds,
+      maxPanSpeed: canvas.auto_pan_speed,
+      onPan: () => {
+        const [canvasX, canvasY] = conversion.clientPosToCanvasPos([
+          state.pointer.client.x,
+          state.pointer.client.y
+        ])
+        updatePointerPosition(
+          state.pointer.client.x,
+          state.pointer.client.y,
+          canvasX,
+          canvasY
+        )
+        if (activeAdapter) {
+          activeAdapter.linkConnector.state.snapLinksPos = [canvasX, canvasY]
+        }
+        canvas.setDirty(true, true)
+      }
+    })
+    autoPan.updatePointer(event.clientX, event.clientY)
+    autoPan.start()
+
+    canvas.setDirty(true, true)
+  }
+
+  tryOnScopeDispose(() => {
+    if (pointerSession.isActive()) {
+      cleanupInteraction()
+    }
+  })
+
+  function onDoubleClick(e: PointerEvent) {
+    if (!nodeId) return
+    const { graph } = app.canvas
+    if (!graph) return
+    const node = graph.getNodeById(nodeId)
+    if (!node) return
+    augmentToCanvasPointerEvent(e, node, app.canvas)
+    node.onInputDblClick?.(index, e)
+  }
+  function onClick(e: PointerEvent) {
+    if (!nodeId) return
+    const { graph } = app.canvas
+    if (!graph) return
+    const node = graph.getNodeById(nodeId)
+    if (!node) return
+    augmentToCanvasPointerEvent(e, node, app.canvas)
+    node.onInputClick?.(index, e)
+  }
+
+  return {
+    onClick,
+    onDoubleClick,
+    onPointerDown
+  }
+}

@@ -1,0 +1,88 @@
+import { tryOnScopeDispose, useEventListener } from '@vueuse/core'
+import { shallowRef } from 'vue'
+
+import { useCanvasStore } from '@/renderer/core/canvas/canvasStore'
+
+export function useShiftKeySync() {
+  const shiftKeyState = shallowRef(false)
+  let canvasEl: HTMLCanvasElement | null = null
+
+  /**
+   * Synchronizes shift key state to LiteGraph canvas by dispatching synthetic keyboard events.
+   *
+   * Only dispatches events when shift state actually changes to minimize overhead.
+   * Canvas reference is lazily initialized on first sync.
+   *
+   * @param isShiftPressed - Current shift key state to synchronize
+   */
+  function syncShiftState(isShiftPressed: boolean) {
+    if (isShiftPressed === shiftKeyState.value) return
+
+    // Lazy-initialize canvas reference on first use
+    if (!canvasEl) {
+      canvasEl = useCanvasStore().canvas?.canvas ?? null
+      if (!canvasEl) return // Canvas not ready yet
+    }
+
+    shiftKeyState.value = isShiftPressed
+    canvasEl.dispatchEvent(
+      new KeyboardEvent(isShiftPressed ? 'keydown' : 'keyup', {
+        key: 'Shift',
+        shiftKey: isShiftPressed,
+        bubbles: true
+      })
+    )
+  }
+
+  /**
+   * Tracks shift key state during drag/resize operations and synchronizes to canvas.
+   *
+   * Attaches window-level keyboard event listeners for the duration of the operation.
+   * Listeners are automatically cleaned up when the returned function is called.
+   *
+   * @param initialShiftKey - Shift state when drag/resize begins
+   * @returns Cleanup function that removes event listeners - must be called when operation ends
+   *
+   * @example
+   * ```ts
+   * function startDrag(event: PointerEvent) {
+   *   const stopTracking = trackShiftKey(event.shiftKey)
+   *
+   *   const handlePointerUp = () => {
+   *     stopTracking() // Cleanup listeners
+   *   }
+   * }
+   * ```
+   */
+  function trackShiftKey(initialShiftKey: boolean): () => void {
+    // Sync initial shift state
+    syncShiftState(initialShiftKey)
+
+    // Listen for shift key press/release during the operation
+    const handleKeyEvent = (e: KeyboardEvent) => {
+      if (e.key !== 'Shift') return
+      syncShiftState(e.shiftKey)
+    }
+
+    const stopKeydown = useEventListener(window, 'keydown', handleKeyEvent, {
+      passive: true
+    })
+    const stopKeyup = useEventListener(window, 'keyup', handleKeyEvent, {
+      passive: true
+    })
+
+    // Return cleanup function that stops both listeners
+    return () => {
+      stopKeydown()
+      stopKeyup()
+    }
+  }
+
+  // Cleanup on component unmount
+  tryOnScopeDispose(() => {
+    shiftKeyState.value = false
+    canvasEl = null
+  })
+
+  return { trackShiftKey }
+}

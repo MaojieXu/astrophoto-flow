@@ -1,0 +1,37 @@
+# Bilingual-pair consistency record for .agents/notes/proposed/feature/2026-11-14-calibration-bindings.md ↔ .agents/notes/proposed/feature/2026-11-14-calibration-bindings.zh.md: per heading
+# section, a hash of its English and Chinese blocks outside code blocks and generated regions.
+# After editing either side, bring the other along and re-record with:
+#   pnpm run verify-translation-pairing --write .agents/notes/proposed/feature/2026-11-14-calibration-bindings.md
+/agent-note-calibration-is-a-binding-not-a-claim-about-the-pixels:
+  en: e75c56ae01eec010
+  zh: f203964e6dc5bcbd
+/agent-note-calibration-is-a-binding-not-a-claim-about-the-pixels/problem:
+  en: 2382966b25b15e85
+  zh: 550e31adf4cfbcca
+/agent-note-calibration-is-a-binding-not-a-claim-about-the-pixels/proposal:
+  en: 09d7004afcd22ba1
+  zh: 45e4276328e95d55
+/agent-note-calibration-is-a-binding-not-a-claim-about-the-pixels/proposal/the-binding:
+  en: 7906d8d2b46faf41
+  zh: 7986aa816f4ee746
+/agent-note-calibration-is-a-binding-not-a-claim-about-the-pixels/proposal/status-and-evidence:
+  en: a9b9cf015d66dc0b
+  zh: b6548cafb2c88296
+/agent-note-calibration-is-a-binding-not-a-claim-about-the-pixels/proposal/candidates-and-checks:
+  en: 43318160f3824c65
+  zh: 60c1fec9f93ec3cf
+/agent-note-calibration-is-a-binding-not-a-claim-about-the-pixels/proposal/batch-binding:
+  en: 12ff5156b197568e
+  zh: b5d1edc4c980cec6
+/agent-note-calibration-is-a-binding-not-a-claim-about-the-pixels/proposal/execution-boundary:
+  en: 97a6f7a0aa15f203
+  zh: 02e1034d5e8b6f23
+/agent-note-calibration-is-a-binding-not-a-claim-about-the-pixels/alternatives-considered:
+  en: 6333d5d5370deb83
+  zh: 91c81be19aaf3dfe
+/agent-note-calibration-is-a-binding-not-a-claim-about-the-pixels/acceptance-criteria:
+  en: 81099f30280d0fed
+  zh: a6bf46e71a0c065a
+/agent-note-calibration-is-a-binding-not-a-claim-about-the-pixels/risks:
+  en: 835b487116dca591
+  zh: b3921f6e42f7156e

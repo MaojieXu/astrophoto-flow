@@ -144,6 +144,9 @@ export const TRANSLATION_SCOPE_GLOB_EXCLUDES = [
   '.artifacts/**',
   'reference/**',
   'engine/**',
+  // The vendored engine and its frontend keep their own English documentation.
+  'src/workbench/backend/**',
+  'src/workbench/frontend/**',
 ]
 
 /** Whether a repository-relative path belongs to a dependency or generated tree. */
@@ -154,6 +157,8 @@ function isTranslationSourceExcluded(file: string): boolean {
     || segment.startsWith('.node-next-types-'))
     || file.startsWith('reference/')
     || file.startsWith('engine/')
+    || file.startsWith('src/workbench/backend/')
+    || file.startsWith('src/workbench/frontend/')
 }
 
 /** Whether one discovered Markdown or sidecar path belongs to the bilingual source corpus. */

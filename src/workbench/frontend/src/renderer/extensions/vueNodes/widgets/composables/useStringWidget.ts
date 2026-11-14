@@ -1,0 +1,104 @@
+import type { LGraphNode } from '@/lib/litegraph/src/litegraph'
+import { resolveNodeRootGraphId } from '@/lib/litegraph/src/utils/widget'
+import { defineDeprecatedProperty } from '@/lib/litegraph/src/utils/feedback'
+import {
+  bindMultilineTextareaWidget,
+  createMultilineInputElement
+} from '@/renderer/extensions/vueNodes/widgets/utils/multilineTextarea'
+import { isStringInputSpec } from '@/schemas/nodeDef/nodeDefSchemaV2'
+import type { InputSpec } from '@/schemas/nodeDef/nodeDefSchemaV2'
+import { useApp } from '@/scripts/appInstance'
+import type { DOMWidgetOptions } from '@/scripts/domWidget'
+import type { ComfyWidgetConstructorV2 } from '@/types/widgetConstructor'
+import { useWidgetValueStore } from '@/stores/widgetValueStore'
+import { widgetId } from '@/types/widgetId'
+
+function addMultilineWidget(
+  node: LGraphNode,
+  name: string,
+  opts: { defaultVal: string; placeholder?: string }
+) {
+  const widgetStore = useWidgetValueStore()
+  const inputEl = createMultilineInputElement(
+    opts.defaultVal,
+    opts.placeholder || name
+  )
+
+  // Declared separately (rather than reading `widget.options` from the
+  // outer closure below) because `addDOMWidget` can invoke `setValue`
+  // synchronously, while restoring a saved value, before the `widget`
+  // binding it returns is initialized.
+  const widgetOptions: DOMWidgetOptions<string> = {
+    getValue(): string {
+      const graphId = resolveNodeRootGraphId(node, useApp().rootGraph.id)
+      const widgetState = widgetStore.getWidget(
+        widgetId(graphId, node.id, name)
+      )
+
+      return typeof widgetState?.value === 'string'
+        ? widgetState.value
+        : inputEl.value
+    },
+    setValue(v: string) {
+      inputEl.value = v
+      const graphId = resolveNodeRootGraphId(node, useApp().rootGraph.id)
+      const id = widgetId(graphId, node.id, name)
+      const widgetState = widgetStore.getWidget(id)
+      if (widgetState) {
+        widgetState.value = v
+        return
+      }
+      widgetStore.registerWidget(id, {
+        type: 'customtext',
+        value: v,
+        options: widgetOptions
+      })
+    }
+  }
+
+  const widget = node.addDOMWidget(name, 'customtext', inputEl, widgetOptions)
+
+  widget.element = inputEl
+
+  /** @deprecated Use {@link widget.element} instead (renamed in PR #8594). */
+  defineDeprecatedProperty(
+    widget,
+    'inputEl',
+    'element',
+    'widget.inputEl is deprecated. Use widget.element instead.'
+  )
+  widget.options.minNodeSize = [400, 200]
+
+  bindMultilineTextareaWidget(widget, inputEl)
+
+  return widget
+}
+
+export const useStringWidget = () => {
+  const widgetConstructor: ComfyWidgetConstructorV2 = (
+    node: LGraphNode,
+    inputSpec: InputSpec
+  ) => {
+    if (!isStringInputSpec(inputSpec)) {
+      throw new Error(`Invalid input data: ${inputSpec}`)
+    }
+
+    const defaultVal = inputSpec.default ?? ''
+    const multiline = inputSpec.multiline
+
+    const widget = multiline
+      ? addMultilineWidget(node, inputSpec.name, {
+          defaultVal,
+          placeholder: inputSpec.placeholder
+        })
+      : node.addWidget('text', inputSpec.name, defaultVal, () => {}, {})
+
+    if (typeof inputSpec.dynamicPrompts === 'boolean') {
+      widget.dynamicPrompts = inputSpec.dynamicPrompts
+    }
+
+    return widget
+  }
+
+  return widgetConstructor
+}

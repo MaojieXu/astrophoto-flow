@@ -6,3 +6,12 @@ coverage/
 .artifacts/
 .env
 reference/
+.codegraph/
+
+__pycache__/
+*.pyc
+.venv/
+src/workbench/backend/web/
+src/workbench/backend/user/
+src/workbench/backend/tests/inference/samples/exr_previews/
+src/workbench/frontend/dist/

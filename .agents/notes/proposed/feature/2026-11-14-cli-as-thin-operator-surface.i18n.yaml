@@ -1,0 +1,37 @@
+# Bilingual-pair consistency record for .agents/notes/proposed/feature/2026-11-14-cli-as-thin-operator-surface.md ↔ .agents/notes/proposed/feature/2026-11-14-cli-as-thin-operator-surface.zh.md: per heading
+# section, a hash of its English and Chinese blocks outside code blocks and generated regions.
+# After editing either side, bring the other along and re-record with:
+#   pnpm run verify-translation-pairing --write .agents/notes/proposed/feature/2026-11-14-cli-as-thin-operator-surface.md
+/agent-note-the-cli-is-a-thin-operator-surface-not-a-second-api:
+  en: 645bcd7ffda9d7d0
+  zh: 182d97c99534d282
+/agent-note-the-cli-is-a-thin-operator-surface-not-a-second-api/problem:
+  en: ae27b584872441a9
+  zh: 023f4cdf6c4dccd9
+/agent-note-the-cli-is-a-thin-operator-surface-not-a-second-api/proposal:
+  en: d6df14ff59f5f539
+  zh: e6e4a058a2877a10
+/agent-note-the-cli-is-a-thin-operator-surface-not-a-second-api/proposal/entry-point-and-workspace:
+  en: 00c7df59ac94c1ec
+  zh: cf539336a78e79e9
+/agent-note-the-cli-is-a-thin-operator-surface-not-a-second-api/proposal/local-commands:
+  en: 05cd08ba1a1a252e
+  zh: 17c56ef8325a0a35
+/agent-note-the-cli-is-a-thin-operator-surface-not-a-second-api/proposal/domain-commands:
+  en: 675f5cd170aafcc0
+  zh: 0fcf13394c703971
+/agent-note-the-cli-is-a-thin-operator-surface-not-a-second-api/proposal/output-and-errors:
+  en: c80b16c54f7169a9
+  zh: 1d0ba097957cbc06
+/agent-note-the-cli-is-a-thin-operator-surface-not-a-second-api/proposal/relationship-to-mcp:
+  en: 80636185f76abe90
+  zh: 779d9fa238a504e3
+/agent-note-the-cli-is-a-thin-operator-surface-not-a-second-api/alternatives-considered:
+  en: 66716e0f218fbb59
+  zh: db234b0908dc8927
+/agent-note-the-cli-is-a-thin-operator-surface-not-a-second-api/acceptance-criteria:
+  en: c3105577587ac785
+  zh: 24aa57b8a5c96eee
+/agent-note-the-cli-is-a-thin-operator-surface-not-a-second-api/risks:
+  en: cd78c931978d94b4
+  zh: f9140f5abf24bb0c

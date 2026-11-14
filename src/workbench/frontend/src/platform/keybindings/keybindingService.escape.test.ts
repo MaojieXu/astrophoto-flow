@@ -1,0 +1,295 @@
+import { useSettingStore } from '@/platform/settings/settingStore'
+import { markRaw } from 'vue'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+
+import { CORE_KEYBINDINGS } from '@/platform/keybindings/defaults'
+import {
+  clearEscapeOverrides,
+  registerEscapeOverride
+} from '@/platform/keybindings/escapeOverride'
+import { KeyComboImpl } from '@/platform/keybindings/keyCombo'
+import { KeybindingImpl } from '@/platform/keybindings/keybinding'
+import { registerCoreKeybindingCommands } from '@/platform/keybindings/__fixtures__/registerCoreKeybindingCommands'
+import { useKeybindingService } from '@/platform/keybindings/keybindingService'
+import { useKeybindingStore } from '@/platform/keybindings/keybindingStore'
+import { useCommandStore } from '@/stores/commandStore'
+import type { DialogInstance } from '@/stores/dialogStore'
+import { useDialogStore } from '@/stores/dialogStore'
+
+function createTestDialogInstance(
+  key: string,
+  overrides: Partial<DialogInstance> = {}
+): DialogInstance {
+  return {
+    key,
+    visible: true,
+    component: markRaw({ template: '<div />' }),
+    contentProps: {},
+    dialogComponentProps: {},
+    priority: 0,
+    ...overrides
+  }
+}
+
+vi.mock<unknown>(import('@/scripts/app'), () => ({
+  app: {
+    canvas: null
+  }
+}))
+
+beforeEach(() => {
+  vi.mocked(useSettingStore().get).mockImplementation(() => [])
+})
+
+describe('keybindingService - Escape key handling', () => {
+  let keybindingService: ReturnType<typeof useKeybindingService>
+
+  beforeEach(() => {
+    vi.mocked(useCommandStore().execute).mockResolvedValue(undefined)
+
+    const dialogStore = useDialogStore()
+    dialogStore.dialogStack.length = 0
+
+    registerCoreKeybindingCommands()
+    keybindingService = useKeybindingService()
+    keybindingService.registerCoreKeybindings()
+  })
+
+  afterEach(() => {
+    clearEscapeOverrides()
+  })
+
+  function createKeyboardEvent(
+    key: string,
+    options: {
+      target?: Element
+      ctrlKey?: boolean
+      altKey?: boolean
+      metaKey?: boolean
+      shiftKey?: boolean
+    } = {}
+  ): KeyboardEvent {
+    const event = new KeyboardEvent('keydown', {
+      key,
+      ctrlKey: options.ctrlKey ?? false,
+      altKey: options.altKey ?? false,
+      metaKey: options.metaKey ?? false,
+      shiftKey: options.shiftKey ?? false,
+      bubbles: true,
+      cancelable: true
+    })
+
+    event.preventDefault = vi.fn()
+    event.composedPath = vi.fn(() => [options.target ?? document.body])
+
+    return event
+  }
+
+  it('should execute Escape keybinding when no dialogs are open', async () => {
+    const event = createKeyboardEvent('Escape')
+    await keybindingService.keybindHandler(event)
+
+    expect(useCommandStore().execute).toHaveBeenCalledWith(
+      'Comfy.Graph.ExitSubgraph'
+    )
+  })
+
+  it('should NOT execute Escape keybinding when dialogs are open', async () => {
+    const dialogStore = useDialogStore()
+    dialogStore.dialogStack.push(createTestDialogInstance('test-dialog'))
+
+    keybindingService = useKeybindingService()
+
+    const event = createKeyboardEvent('Escape')
+    await keybindingService.keybindHandler(event)
+
+    expect(useCommandStore().execute).not.toHaveBeenCalled()
+  })
+
+  it('should NOT execute Escape keybinding with modifiers when a dialog is open', async () => {
+    const dialogStore = useDialogStore()
+    dialogStore.dialogStack.push(createTestDialogInstance('test-dialog'))
+
+    const keybindingStore = useKeybindingStore()
+    keybindingStore.addDefaultKeybinding(
+      new KeybindingImpl({
+        commandId: 'Test.CtrlEscape',
+        combo: { key: 'Escape', ctrl: true }
+      })
+    )
+
+    keybindingService = useKeybindingService()
+
+    const event = createKeyboardEvent('Escape', { ctrlKey: true })
+    await keybindingService.keybindHandler(event)
+
+    expect(useCommandStore().execute).not.toHaveBeenCalled()
+  })
+
+  it.for(['menu', 'menubar', 'dialog'])(
+    'should leave Escape events from role=%s to the overlay',
+    async (role) => {
+      const menu = document.createElement('div')
+      menu.setAttribute('role', role)
+      const menuItem = document.createElement('div')
+      menuItem.setAttribute('role', 'menuitemcheckbox')
+      menu.appendChild(menuItem)
+
+      const event = createKeyboardEvent('Escape', { target: menuItem })
+      await keybindingService.keybindHandler(event)
+
+      expect(event.preventDefault).not.toHaveBeenCalled()
+      expect(useCommandStore().execute).not.toHaveBeenCalled()
+    }
+  )
+
+  it('does not throw when Escape fires with a non-Element target (e.g. document, in Safari when nothing has focus)', async () => {
+    const event = createKeyboardEvent('Escape', {
+      target: document as unknown as Element
+    })
+
+    await expect(keybindingService.keybindHandler(event)).resolves.not.toThrow()
+
+    expect(useCommandStore().execute).toHaveBeenCalledWith(
+      'Comfy.Graph.ExitSubgraph'
+    )
+  })
+
+  describe('registered Escape override', () => {
+    it('suppresses ExitSubgraph when a registered override handles the event', async () => {
+      const override = vi.fn().mockReturnValue(true)
+      registerEscapeOverride(override)
+
+      const event = createKeyboardEvent('Escape')
+      await keybindingService.keybindHandler(event)
+
+      expect(override).toHaveBeenCalledWith(event)
+      expect(useCommandStore().execute).not.toHaveBeenCalled()
+      expect(event.preventDefault).toHaveBeenCalled()
+    })
+
+    it('still dispatches ExitSubgraph when no override is registered', async () => {
+      const event = createKeyboardEvent('Escape')
+      await keybindingService.keybindHandler(event)
+
+      expect(useCommandStore().execute).toHaveBeenCalledWith(
+        'Comfy.Graph.ExitSubgraph'
+      )
+    })
+
+    it('still dispatches ExitSubgraph when the registered override declines', async () => {
+      registerEscapeOverride(() => false)
+
+      const event = createKeyboardEvent('Escape')
+      await keybindingService.keybindHandler(event)
+
+      expect(useCommandStore().execute).toHaveBeenCalledWith(
+        'Comfy.Graph.ExitSubgraph'
+      )
+    })
+
+    it('never consults the override for a non-Escape keybinding', async () => {
+      const override = vi.fn().mockReturnValue(true)
+      registerEscapeOverride(override)
+
+      useCommandStore().registerCommand({
+        id: 'Test.BareF9',
+        function: () => {}
+      })
+      useKeybindingStore().addDefaultKeybinding(
+        new KeybindingImpl({ commandId: 'Test.BareF9', combo: { key: 'F9' } })
+      )
+
+      const event = createKeyboardEvent('F9')
+      await keybindingService.keybindHandler(event)
+
+      expect(override).not.toHaveBeenCalled()
+      expect(useCommandStore().execute).toHaveBeenCalledWith('Test.BareF9')
+    })
+
+    it('lets an open menu win over a registered override', async () => {
+      const override = vi.fn().mockReturnValue(true)
+      registerEscapeOverride(override)
+
+      const menu = document.createElement('div')
+      menu.setAttribute('role', 'menu')
+      const menuItem = document.createElement('div')
+      menuItem.setAttribute('role', 'menuitemcheckbox')
+      menu.appendChild(menuItem)
+
+      const event = createKeyboardEvent('Escape', { target: menuItem })
+      await keybindingService.keybindHandler(event)
+
+      expect(override).not.toHaveBeenCalled()
+      expect(useCommandStore().execute).not.toHaveBeenCalled()
+    })
+
+    it('lets an open dialog win over a registered override', async () => {
+      const override = vi.fn().mockReturnValue(true)
+      registerEscapeOverride(override)
+
+      const dialogStore = useDialogStore()
+      dialogStore.dialogStack.push(createTestDialogInstance('test-dialog'))
+      keybindingService = useKeybindingService()
+
+      const event = createKeyboardEvent('Escape')
+      await keybindingService.keybindHandler(event)
+
+      expect(override).not.toHaveBeenCalled()
+      expect(useCommandStore().execute).not.toHaveBeenCalled()
+    })
+  })
+
+  it('should verify Escape keybinding exists in CORE_KEYBINDINGS', () => {
+    const escapeBinding = CORE_KEYBINDINGS.find(
+      (kb) => kb.combo.key === 'Escape' && !kb.combo.ctrl && !kb.combo.alt
+    )
+
+    expect(escapeBinding).toBeDefined()
+    expect(escapeBinding?.commandId).toBe('Comfy.Graph.ExitSubgraph')
+  })
+
+  it('should create correct KeyComboImpl from Escape event', () => {
+    const event = new KeyboardEvent('keydown', {
+      key: 'Escape',
+      ctrlKey: false,
+      altKey: false,
+      metaKey: false,
+      shiftKey: false
+    })
+
+    const keyCombo = KeyComboImpl.fromEvent(event)
+
+    expect(keyCombo.key).toBe('Escape')
+    expect(keyCombo.ctrl).toBe(false)
+    expect(keyCombo.alt).toBe(false)
+    expect(keyCombo.shift).toBe(false)
+  })
+
+  it('should still close legacy modals on Escape when no keybinding matched', async () => {
+    useKeybindingStore().removeAllKeybindingsForCommand(
+      'Comfy.Graph.ExitSubgraph'
+    )
+    keybindingService = useKeybindingService()
+
+    const mockModal = document.createElement('div')
+    mockModal.className = 'comfy-modal'
+    mockModal.style.display = 'block'
+    document.body.appendChild(mockModal)
+
+    const originalGetComputedStyle = window.getComputedStyle
+    window.getComputedStyle = vi.fn().mockReturnValue({
+      getPropertyValue: vi.fn().mockReturnValue('block')
+    })
+
+    try {
+      const event = createKeyboardEvent('Escape')
+      await keybindingService.keybindHandler(event)
+
+      expect(mockModal.style.display).toBe('none')
+    } finally {
+      document.body.removeChild(mockModal)
+      window.getComputedStyle = originalGetComputedStyle
+    }
+  })
+})

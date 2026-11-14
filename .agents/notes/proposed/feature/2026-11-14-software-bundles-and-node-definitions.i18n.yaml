@@ -1,0 +1,40 @@
+# Bilingual-pair consistency record for .agents/notes/proposed/feature/2026-11-14-software-bundles-and-node-definitions.md ↔ .agents/notes/proposed/feature/2026-11-14-software-bundles-and-node-definitions.zh.md: per heading
+# section, a hash of its English and Chinese blocks outside code blocks and generated regions.
+# After editing either side, bring the other along and re-record with:
+#   pnpm run verify-translation-pairing --write .agents/notes/proposed/feature/2026-11-14-software-bundles-and-node-definitions.md
+/agent-note-a-software-bundle-is-a-pinned-manifest-adapter-and-node-set:
+  en: 7c8880b30e94d2ec
+  zh: b2e5fb0ebe67335c
+/agent-note-a-software-bundle-is-a-pinned-manifest-adapter-and-node-set/problem:
+  en: 6e7a215a6eb674f6
+  zh: 48e371a097d0df7a
+/agent-note-a-software-bundle-is-a-pinned-manifest-adapter-and-node-set/proposal:
+  en: a7bf17e33c6222d8
+  zh: 06acaff570bf3da1
+/agent-note-a-software-bundle-is-a-pinned-manifest-adapter-and-node-set/proposal/the-bundle-manifest:
+  en: 18333e08b38529b0
+  zh: 8f5816ba63167c25
+/agent-note-a-software-bundle-is-a-pinned-manifest-adapter-and-node-set/proposal/operation-descriptors:
+  en: 2aed56945512c0cf
+  zh: bffc8bfdfe37547b
+/agent-note-a-software-bundle-is-a-pinned-manifest-adapter-and-node-set/proposal/node-definitions:
+  en: 4250deb1d412773f
+  zh: d28425ece76d87e3
+/agent-note-a-software-bundle-is-a-pinned-manifest-adapter-and-node-set/proposal/the-adapter:
+  en: 4971191d6f529185
+  zh: abf01cf4637b22a7
+/agent-note-a-software-bundle-is-a-pinned-manifest-adapter-and-node-set/proposal/validation-and-registration:
+  en: cf4847c623a7c60e
+  zh: 24432e8f586408ce
+/agent-note-a-software-bundle-is-a-pinned-manifest-adapter-and-node-set/proposal/pinning-and-results:
+  en: bd39725d4a342b72
+  zh: e6a7a5e9485d4dd7
+/agent-note-a-software-bundle-is-a-pinned-manifest-adapter-and-node-set/alternatives-considered:
+  en: d80e5840aca6359a
+  zh: 999520bc3a3a5156
+/agent-note-a-software-bundle-is-a-pinned-manifest-adapter-and-node-set/acceptance-criteria:
+  en: 418a2348d2993b46
+  zh: 60970c78496e1777
+/agent-note-a-software-bundle-is-a-pinned-manifest-adapter-and-node-set/risks:
+  en: b2c90e9ac8de185c
+  zh: e71363865e4fad2b

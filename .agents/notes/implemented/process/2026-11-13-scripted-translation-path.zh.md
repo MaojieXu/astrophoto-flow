@@ -14,6 +14,10 @@ Status: implemented
 
 凭据来自 `APF_TRANSLATION_*` 环境变量或永不入库的根 `.env`；缺少密钥时命令直接失败而不跳过，每次调用都在 `.artifacts/translations/` 写下记录，含模型、提示词路径与两侧内容哈希；[verify-translation-prompt](../../../scripts/verify-translation-prompt.ts) 加入门禁集合，使提示词资产与样例清单和其他契约一样受检查。
 
+## 网关路由
+
+第一次真实调用打到一个按 token 计费的网关，在订阅仍有效时对着空余额回了 `402 Payment Required`，原因是路径决定计费来源：普通推理路径消耗预付余额，Go 路径消耗订阅额度。默认 base URL 已改为 Go 路径，经由它调用会回报 `billing_source: go`，每个请求携带 `x-opencode-session`，以便网关路由与缓存。模型标识符随路径不同，所以模型保持为变量而非常量。
+
 ## 备选方案
 
 **翻译完全保持人工。** 否决：门禁擅长结构、看不见文笔，因此每篇新文档仍要付出漫长的人工通写，而这部分本来也没有任何检查能验证。

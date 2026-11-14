@@ -1,0 +1,1085 @@
+import { fromAny } from '@total-typescript/shoehorn'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
+
+import type { LGraphNode } from '@/lib/litegraph/src/litegraph'
+import { LiteGraph } from '@/lib/litegraph/src/litegraph'
+import type { ExecutedWsMessage } from '@/platform/remote/comfyui/execution/types'
+import { app } from '@/scripts/app'
+import { useNodeOutputStore } from '@/stores/nodeOutputStore'
+import {
+  createNodeExecutionId,
+  createNodeLocatorId
+} from '@/types/nodeIdentification'
+import { toNodeId } from '@/types/nodeId'
+import * as litegraphUtil from '@/utils/litegraphUtil'
+
+vi.mock<unknown>(import('@/utils/litegraphUtil'), () => ({
+  isAnimatedOutput: vi.fn(),
+  isVideoNode: vi.fn(),
+  resolveNode: vi.fn()
+}))
+
+vi.mock(import('@/scripts/app'))
+
+const createMockNode = (
+  overrides: Record<string, unknown> = {}
+): LGraphNode => {
+  const { id = 1, ...rest } = overrides
+  return fromAny<LGraphNode, unknown>({
+    id: toNodeId(id as string | number),
+    type: 'TestNode',
+    ...rest
+  })
+}
+
+const createMockOutputs = (
+  images?: ExecutedWsMessage['output']['images']
+): ExecutedWsMessage['output'] => ({ images })
+
+vi.mock<unknown>(import('@/utils/graphTraversalUtil'), () => ({
+  executionIdToNodeLocatorId: vi.fn((_rootGraph: unknown, id: string) => id)
+}))
+
+describe('nodeOutputStore setNodeOutputsByExecutionId with merge', () => {
+  beforeEach(() => {
+    app.nodeOutputs = {}
+    app.nodePreviewImages = {}
+  })
+
+  it('keeps execution-keyed outputs distinct from locator-keyed outputs', () => {
+    const store = useNodeOutputStore()
+    const firstOutput = createMockOutputs([{ filename: 'first.png' }])
+    const secondOutput = createMockOutputs([{ filename: 'second.png' }])
+
+    store.setNodeOutputsByExecutionId(
+      createNodeExecutionId([toNodeId(11), toNodeId(20), toNodeId(10)]),
+      firstOutput
+    )
+    store.setNodeOutputsByExecutionId(
+      createNodeExecutionId([toNodeId(12), toNodeId(20), toNodeId(10)]),
+      secondOutput
+    )
+
+    expect(
+      store.getNodeOutputByExecutionId(
+        createNodeExecutionId([toNodeId(11), toNodeId(20), toNodeId(10)])
+      )
+    ).toEqual(firstOutput)
+    expect(
+      store.getNodeOutputByExecutionId(
+        createNodeExecutionId([toNodeId(12), toNodeId(20), toNodeId(10)])
+      )
+    ).toEqual(secondOutput)
+  })
+
+  it('merges execution-keyed outputs when merge is true', () => {
+    const store = useNodeOutputStore()
+    const initialOutput = createMockOutputs([{ filename: 'first.png' }])
+    const nextOutput = createMockOutputs([{ filename: 'second.png' }])
+
+    store.setNodeOutputsByExecutionId(
+      createNodeExecutionId([toNodeId(11), toNodeId(20), toNodeId(10)]),
+      initialOutput
+    )
+    store.setNodeOutputsByExecutionId(
+      createNodeExecutionId([toNodeId(11), toNodeId(20), toNodeId(10)]),
+      nextOutput,
+      {
+        merge: true
+      }
+    )
+
+    expect(
+      store.getNodeOutputByExecutionId(
+        createNodeExecutionId([toNodeId(11), toNodeId(20), toNodeId(10)])
+      )?.images
+    ).toEqual([{ filename: 'first.png' }, { filename: 'second.png' }])
+  })
+
+  it('keeps execution-keyed previews distinct from locator-keyed previews', () => {
+    const store = useNodeOutputStore()
+
+    store.setNodePreviewsByExecutionId(
+      createNodeExecutionId([toNodeId(11), toNodeId(20), toNodeId(10)]),
+      ['blob:first']
+    )
+    store.setNodePreviewsByExecutionId(
+      createNodeExecutionId([toNodeId(12), toNodeId(20), toNodeId(10)]),
+      ['blob:second']
+    )
+
+    expect(
+      store.getNodePreviewImagesByExecutionId(
+        createNodeExecutionId([toNodeId(11), toNodeId(20), toNodeId(10)])
+      )
+    ).toEqual(['blob:first'])
+    expect(
+      store.getNodePreviewImagesByExecutionId(
+        createNodeExecutionId([toNodeId(12), toNodeId(20), toNodeId(10)])
+      )
+    ).toEqual(['blob:second'])
+  })
+
+  it('projects execution output into canonical state and view URLs', () => {
+    const store = useNodeOutputStore()
+    const node = createMockNode({ id: 1 })
+    const executionId = createNodeExecutionId([node.id])
+    const output = createMockOutputs([
+      {
+        filename: 'execution-result.png',
+        subfolder: 'daily outputs',
+        type: 'output'
+      }
+    ])
+
+    store.setNodeOutputsByExecutionId(executionId, output)
+
+    expect(store.nodeOutputs[String(node.id)]).toEqual(output)
+    expect(app.nodeOutputs[String(node.id)]).toEqual(output)
+
+    const [url] = store.getNodeImageUrlsByExecutionId(executionId, node) ?? []
+    const previewUrl = new URL(url, window.location.origin)
+    expect(previewUrl.pathname).toBe('/api/view')
+    expect(previewUrl.searchParams.get('filename')).toBe('execution-result.png')
+    expect(previewUrl.searchParams.get('subfolder')).toBe('daily outputs')
+    expect(previewUrl.searchParams.get('type')).toBe('output')
+  })
+
+  it('carries preview_id on the view URL', () => {
+    const store = useNodeOutputStore()
+    const node = createMockNode({ id: 1 })
+
+    store.setNodeOutputsByExecutionId(
+      createNodeExecutionId([node.id]),
+      createMockOutputs([{ filename: 'render.exr', preview_id: 'preview-1' }])
+    )
+
+    const [url] = store.getNodeImageUrls(node) ?? []
+    const viewUrl = new URL(url, window.location.origin)
+    expect(viewUrl.pathname).toBe('/api/view')
+    expect(viewUrl.searchParams.get('preview_id')).toBe('preview-1')
+  })
+
+  it('requests a webp preview for exr outputs by default', () => {
+    const store = useNodeOutputStore()
+    const node = createMockNode({ id: 1 })
+
+    store.setNodeOutputsByExecutionId(
+      createNodeExecutionId([node.id]),
+      createMockOutputs([{ filename: 'render.exr' }])
+    )
+
+    const [url] = store.getNodeImageUrls(node) ?? []
+    expect(new URL(url, window.location.origin).searchParams.get('preview')).toBe(
+      'webp'
+    )
+  })
+
+  it('owns preview arrays after setting them', () => {
+    const store = useNodeOutputStore()
+    const executionId = createNodeExecutionId([toNodeId(11)])
+    const previews = ['blob:first']
+
+    store.setNodePreviewsByExecutionId(executionId, previews)
+    previews.push('blob:caller-mutation')
+
+    expect(store.getNodePreviewImagesByExecutionId(executionId)).toEqual([
+      'blob:first'
+    ])
+    expect(store.latestPreview).toEqual(['blob:first'])
+  })
+
+  it('should update reactive nodeOutputs.value when merging outputs', () => {
+    const store = useNodeOutputStore()
+    const executionId = createNodeExecutionId([toNodeId(1)])
+
+    const initialOutput = createMockOutputs([{ filename: 'a.png' }])
+    store.setNodeOutputsByExecutionId(executionId, initialOutput)
+
+    expect(app.nodeOutputs[executionId]?.images).toHaveLength(1)
+    expect(store.nodeOutputs[executionId]?.images).toHaveLength(1)
+
+    const newOutput = createMockOutputs([{ filename: 'b.png' }])
+    store.setNodeOutputsByExecutionId(executionId, newOutput, { merge: true })
+
+    expect(app.nodeOutputs[executionId]?.images).toHaveLength(2)
+    expect(store.nodeOutputs[executionId]?.images).toHaveLength(2)
+  })
+
+  it('should assign to reactive ref after merge for Vue reactivity', () => {
+    const store = useNodeOutputStore()
+    const executionId = createNodeExecutionId([toNodeId(1)])
+
+    const initialOutput = createMockOutputs([{ filename: 'a.png' }])
+    store.setNodeOutputsByExecutionId(executionId, initialOutput)
+
+    const newOutput = createMockOutputs([{ filename: 'b.png' }])
+
+    store.setNodeOutputsByExecutionId(executionId, newOutput, { merge: true })
+
+    expect(store.nodeOutputs[executionId]).toStrictEqual(
+      app.nodeOutputs[executionId]
+    )
+    expect(store.nodeOutputs[executionId]?.images).toHaveLength(2)
+  })
+
+  it('should create a new object reference on merge so Vue detects the change', () => {
+    const store = useNodeOutputStore()
+    const executionId = createNodeExecutionId([toNodeId(1)])
+
+    const initialOutput = createMockOutputs([{ filename: 'a.png' }])
+    store.setNodeOutputsByExecutionId(executionId, initialOutput)
+
+    const refBefore = store.nodeOutputs[executionId]
+
+    const newOutput = createMockOutputs([{ filename: 'b.png' }])
+    store.setNodeOutputsByExecutionId(executionId, newOutput, { merge: true })
+
+    const refAfter = store.nodeOutputs[executionId]
+
+    expect(refAfter).not.toBe(refBefore)
+    expect(refAfter?.images).toHaveLength(2)
+  })
+
+  it('replaces outputs written through the legacy map', () => {
+    const store = useNodeOutputStore()
+    const node = createMockNode({ id: 5 })
+
+    store.setNodeOutputs(node, 'canonical.png')
+    const legacyOutput = createMockOutputs([{ filename: 'legacy.png' }])
+    store.replaceOutputsFromLegacy({ '5': legacyOutput })
+
+    expect(store.getNodeOutputs(node)).toEqual(legacyOutput)
+  })
+
+  it('projects previews without reading legacy map mutations back', () => {
+    const store = useNodeOutputStore()
+    const node = createMockNode({ id: 5 })
+
+    store.setNodePreviewsByLocatorId(createNodeLocatorId(null, node.id), [
+      'blob:canonical'
+    ])
+    app.nodePreviewImages['5'] = ['blob:legacy']
+
+    expect(store.getNodePreviews(node)).toEqual(['blob:canonical'])
+  })
+})
+
+describe('nodeOutputStore legacy entry synchronization', () => {
+  beforeEach(() => {
+    app.nodeOutputs = {}
+  })
+
+  it('updates one mapped output without replacing unrelated records', () => {
+    const store = useNodeOutputStore()
+    const untouched = createMockOutputs([{ filename: 'untouched.png' }])
+    store.replaceOutputsFromLegacy({ untouched })
+    const untouchedRecord = store.nodeOutputs.untouched
+
+    store.setOutputFromLegacy(
+      'changed',
+      createMockOutputs([{ filename: 'changed.png' }])
+    )
+
+    expect(store.nodeOutputs.untouched).toBe(untouchedRecord)
+    expect(store.nodeOutputs.changed?.images?.[0]?.filename).toBe('changed.png')
+
+    store.removeOutputFromLegacy('changed')
+
+    expect(store.nodeOutputs.changed).toBeUndefined()
+    expect(store.nodeOutputs.untouched).toBe(untouchedRecord)
+  })
+})
+
+describe('nodeOutputStore replaceNodeOutputImages', () => {
+  beforeEach(() => {
+    app.nodeOutputs = {}
+    app.nodePreviewImages = {}
+  })
+
+  it('drops the previous output metadata when replacing the images', () => {
+    const store = useNodeOutputStore()
+    const node = createMockNode({ id: 7 })
+    store.setOutputFromLegacy(
+      '7',
+      fromAny({
+        images: [{ filename: 'previous.webp' }],
+        animated: [true],
+        video: [{ filename: 'previous.mp4' }]
+      })
+    )
+
+    const images = [
+      {
+        filename: 'painted.png',
+        subfolder: 'clipspace',
+        type: 'input' as const
+      }
+    ]
+    store.replaceNodeOutputImages(node, images)
+
+    expect(store.nodeOutputs['7']?.animated).toBeUndefined()
+    expect(store.nodeOutputs['7']?.video).toBeUndefined()
+    expect(store.nodeOutputs['7']?.images).toEqual(images)
+  })
+
+  it('ignores an empty replacement', () => {
+    const store = useNodeOutputStore()
+    const images = [{ filename: 'previous.png', type: 'input' as const }]
+    const node = createMockNode({ id: 7, images })
+    store.setOutputFromLegacy('7', { images })
+
+    store.replaceNodeOutputImages(node, [])
+
+    expect(store.nodeOutputs['7']?.images).toEqual(images)
+    expect(node.images).toEqual(images)
+  })
+
+  it('removes stale previews when replacing the images', () => {
+    const store = useNodeOutputStore()
+    const node = createMockNode({ id: 7 })
+    store.setNodePreviewsByLocatorId(createNodeLocatorId(null, node.id), [
+      'preview:stale'
+    ])
+
+    store.replaceNodeOutputImages(node, [
+      { filename: 'painted.png', type: 'input' }
+    ])
+
+    expect(store.getNodePreviews(node)).toBeUndefined()
+    expect(app.nodePreviewImages['7']).toBeUndefined()
+  })
+})
+
+describe('nodeOutputStore restoreOutputs', () => {
+  beforeEach(() => {
+    app.nodeOutputs = {}
+    app.nodePreviewImages = {}
+  })
+
+  it('should keep reactivity after restoreOutputs followed by setNodeOutputsByExecutionId', () => {
+    const store = useNodeOutputStore()
+
+    // Simulate execution: set outputs for node "4" (e.g., PreviewImage)
+    const executionOutput = createMockOutputs([
+      { filename: 'ComfyUI_00001.png', subfolder: '', type: 'temp' }
+    ])
+    const savedOutputs: Record<string, ExecutedWsMessage['output']> = {
+      '4': executionOutput
+    }
+
+    // Simulate undo: restoreOutputs makes app.nodeOutputs and the ref
+    // share the same underlying object if not handled correctly.
+    store.restoreOutputs(savedOutputs)
+
+    expect(store.nodeOutputs['4']).toStrictEqual(executionOutput)
+    expect(store.nodeOutputs['3']).toBeUndefined()
+
+    // Simulate widget callback setting outputs for node "3" (e.g., LoadImage)
+    const widgetOutput = createMockOutputs([
+      { filename: 'example.png', subfolder: '', type: 'input' }
+    ])
+    store.setNodeOutputsByExecutionId(
+      createNodeExecutionId([toNodeId(3)]),
+      widgetOutput
+    )
+
+    // The reactive store must reflect the new output.
+    // Before the fix, the raw write to app.nodeOutputs would mutate the
+    // proxy's target before the proxy write, causing Vue to skip the
+    // reactivity update.
+    expect(store.nodeOutputs['3']).toStrictEqual(widgetOutput)
+    expect(app.nodeOutputs['3']).toStrictEqual(widgetOutput)
+  })
+})
+
+describe('nodeOutputStore input preview preservation', () => {
+  beforeEach(() => {
+    app.nodeOutputs = {}
+    app.nodePreviewImages = {}
+  })
+
+  it('should preserve input preview when execution sends empty output', () => {
+    const store = useNodeOutputStore()
+    const executionId = createNodeExecutionId([toNodeId(3)])
+
+    const inputPreview = createMockOutputs([
+      { filename: 'example.png', subfolder: '', type: 'input' }
+    ])
+    store.setNodeOutputsByExecutionId(executionId, inputPreview)
+
+    expect(store.nodeOutputs[executionId]?.images).toHaveLength(1)
+
+    const emptyExecutionOutput = createMockOutputs()
+    store.setNodeOutputsByExecutionId(executionId, emptyExecutionOutput)
+
+    expect(store.nodeOutputs[executionId]?.images).toHaveLength(1)
+    expect(store.nodeOutputs[executionId]?.images?.[0].filename).toBe(
+      'example.png'
+    )
+  })
+
+  it('should preserve input preview when execution sends output with empty images array', () => {
+    const store = useNodeOutputStore()
+    const executionId = createNodeExecutionId([toNodeId(3)])
+
+    const inputPreview = createMockOutputs([
+      { filename: 'example.png', subfolder: '', type: 'input' }
+    ])
+    store.setNodeOutputsByExecutionId(executionId, inputPreview)
+
+    const emptyImagesOutput = createMockOutputs([])
+    store.setNodeOutputsByExecutionId(executionId, emptyImagesOutput)
+
+    expect(store.nodeOutputs[executionId]?.images).toHaveLength(1)
+    expect(store.nodeOutputs[executionId]?.images?.[0].type).toBe('input')
+  })
+
+  it('should allow execution output with images to overwrite input preview', () => {
+    const store = useNodeOutputStore()
+    const executionId = createNodeExecutionId([toNodeId(3)])
+
+    const inputPreview = createMockOutputs([
+      { filename: 'example.png', subfolder: '', type: 'input' }
+    ])
+    store.setNodeOutputsByExecutionId(executionId, inputPreview)
+
+    const executionOutput = createMockOutputs([
+      { filename: 'output.png', subfolder: '', type: 'output' }
+    ])
+    store.setNodeOutputsByExecutionId(executionId, executionOutput)
+
+    expect(store.nodeOutputs[executionId]?.images).toHaveLength(1)
+    expect(store.nodeOutputs[executionId]?.images?.[0].filename).toBe(
+      'output.png'
+    )
+  })
+
+  it('should not preserve non-input outputs from being overwritten', () => {
+    const store = useNodeOutputStore()
+    const executionId = createNodeExecutionId([toNodeId(4)])
+
+    const tempOutput = createMockOutputs([
+      { filename: 'temp.png', subfolder: '', type: 'temp' }
+    ])
+    store.setNodeOutputsByExecutionId(executionId, tempOutput)
+
+    const emptyOutput = createMockOutputs()
+    store.setNodeOutputsByExecutionId(executionId, emptyOutput)
+
+    expect(store.nodeOutputs[executionId]?.images).toBeUndefined()
+  })
+
+  it('should pass through non-image fields while preserving input preview images', () => {
+    const store = useNodeOutputStore()
+    const executionId = createNodeExecutionId([toNodeId(5)])
+
+    const inputPreview = createMockOutputs([
+      { filename: 'example.png', subfolder: '', type: 'input' }
+    ])
+    store.setNodeOutputsByExecutionId(executionId, inputPreview)
+
+    const videoOutput: ExecutedWsMessage['output'] = {
+      video: [{ filename: 'output.mp4', subfolder: '', type: 'output' }]
+    }
+    store.setNodeOutputsByExecutionId(executionId, videoOutput)
+
+    expect(store.nodeOutputs[executionId]?.images).toHaveLength(1)
+    expect(store.nodeOutputs[executionId]?.images?.[0].filename).toBe(
+      'example.png'
+    )
+    expect(store.nodeOutputs[executionId]?.video).toHaveLength(1)
+    expect(store.nodeOutputs[executionId]?.video?.[0].filename).toBe(
+      'output.mp4'
+    )
+  })
+})
+
+describe('nodeOutputStore getPreviewParam', () => {
+  beforeEach(() => {
+    vi.mocked(app.getPreviewFormatParam).mockReturnValue('&format=test_webp')
+    vi.mocked(litegraphUtil.isAnimatedOutput).mockReturnValue(false)
+    vi.mocked(litegraphUtil.isVideoNode).mockReturnValue(false)
+  })
+
+  it('should return empty string if output is animated', () => {
+    const store = useNodeOutputStore()
+    vi.mocked(litegraphUtil.isAnimatedOutput).mockReturnValue(true)
+    const node = createMockNode()
+    const outputs = createMockOutputs([{ filename: 'img.png' }])
+    expect(store.getPreviewParam(node, outputs)).toBe('')
+    expect(app.getPreviewFormatParam).not.toHaveBeenCalled()
+  })
+
+  it('should return empty string if isVideoNode returns true', () => {
+    const store = useNodeOutputStore()
+    vi.mocked(litegraphUtil.isVideoNode).mockReturnValue(true)
+    const node = createMockNode()
+    const outputs = createMockOutputs([{ filename: 'img.png' }])
+    expect(store.getPreviewParam(node, outputs)).toBe('')
+    expect(app.getPreviewFormatParam).not.toHaveBeenCalled()
+  })
+
+  it('should return empty string if outputs.images is undefined', () => {
+    const store = useNodeOutputStore()
+    const node = createMockNode()
+    const outputs: ExecutedWsMessage['output'] = {}
+    expect(store.getPreviewParam(node, outputs)).toBe('')
+    expect(app.getPreviewFormatParam).not.toHaveBeenCalled()
+  })
+
+  it('should return empty string if outputs.images is empty', () => {
+    const store = useNodeOutputStore()
+    const node = createMockNode()
+    const outputs = createMockOutputs([])
+    expect(store.getPreviewParam(node, outputs)).toBe('')
+    expect(app.getPreviewFormatParam).not.toHaveBeenCalled()
+  })
+
+  it('should return empty string if outputs.images only contains null entries', () => {
+    const store = useNodeOutputStore()
+    const node = createMockNode()
+    const outputs = createMockOutputs(fromAny([null]))
+    expect(store.getPreviewParam(node, outputs)).toBe('')
+    expect(app.getPreviewFormatParam).not.toHaveBeenCalled()
+  })
+
+  it('should return empty string if outputs.images contains SVG images', () => {
+    const store = useNodeOutputStore()
+    const node = createMockNode()
+    const outputs = createMockOutputs([{ filename: 'img.svg' }])
+    expect(store.getPreviewParam(node, outputs)).toBe('')
+    expect(app.getPreviewFormatParam).not.toHaveBeenCalled()
+  })
+
+  it('should return format param for standard image outputs', () => {
+    const store = useNodeOutputStore()
+    const node = createMockNode()
+    const outputs = createMockOutputs([{ filename: 'img.png' }])
+    expect(store.getPreviewParam(node, outputs)).toBe('&format=test_webp')
+    expect(app.getPreviewFormatParam).toHaveBeenCalledTimes(1)
+  })
+
+  it('should return format param for multiple standard images', () => {
+    const store = useNodeOutputStore()
+    const node = createMockNode()
+    const outputs = createMockOutputs([
+      { filename: 'img1.png' },
+      { filename: 'img2.jpg' }
+    ])
+    expect(store.getPreviewParam(node, outputs)).toBe('&format=test_webp')
+    expect(app.getPreviewFormatParam).toHaveBeenCalledTimes(1)
+  })
+
+  it('should request a webp preview for EXR when no format is configured', () => {
+    vi.mocked(app.getPreviewFormatParam).mockReturnValue('')
+    const store = useNodeOutputStore()
+    const node = createMockNode()
+    const outputs = createMockOutputs([{ filename: 'img.exr' }])
+
+    expect(store.getPreviewParam(node, outputs)).toBe('&preview=webp')
+  })
+
+  it('should keep the configured preview format for EXR', () => {
+    const store = useNodeOutputStore()
+    const node = createMockNode()
+    const outputs = createMockOutputs([{ filename: 'img.exr' }])
+
+    expect(store.getPreviewParam(node, outputs)).toBe('&format=test_webp')
+  })
+})
+
+describe('nodeOutputStore snapshotOutputs / restoreOutputs', () => {
+  beforeEach(() => {
+    app.nodeOutputs = {}
+    app.nodePreviewImages = {}
+  })
+
+  it('should round-trip outputs through snapshot and restore', () => {
+    const store = useNodeOutputStore()
+
+    // Set input previews via execution path
+    const inputOutput = createMockOutputs([
+      { filename: 'example.png', subfolder: '', type: 'input' }
+    ])
+    store.setNodeOutputsByExecutionId(
+      createNodeExecutionId([toNodeId(3)]),
+      inputOutput
+    )
+
+    const execOutput = createMockOutputs([
+      { filename: 'ComfyUI_00001.png', subfolder: '', type: 'temp' }
+    ])
+    store.setNodeOutputsByExecutionId(
+      createNodeExecutionId([toNodeId(4)]),
+      execOutput
+    )
+
+    // Snapshot
+    const snapshot = store.snapshotOutputs()
+
+    // Clear everything
+    store.resetAllOutputsAndPreviews()
+    expect(Object.keys(app.nodeOutputs)).toHaveLength(0)
+    expect(Object.keys(store.nodeOutputs)).toHaveLength(0)
+
+    // Restore from snapshot
+    store.restoreOutputs(snapshot)
+
+    expect(app.nodeOutputs['3']).toStrictEqual(inputOutput)
+    expect(app.nodeOutputs['4']).toStrictEqual(execOutput)
+    expect(store.nodeOutputs['3']).toStrictEqual(inputOutput)
+    expect(store.nodeOutputs['4']).toStrictEqual(execOutput)
+  })
+
+  it('should preserve outputs across a simulated tab switch cycle', () => {
+    const store = useNodeOutputStore()
+
+    // Tab A: execution produces outputs for two nodes
+    const outputA1 = createMockOutputs([
+      { filename: 'ComfyUI_00001.png', subfolder: '', type: 'temp' }
+    ])
+    const outputA2 = createMockOutputs([
+      { filename: 'example.png', subfolder: '', type: 'input' }
+    ])
+    store.setNodeOutputsByExecutionId(
+      createNodeExecutionId([toNodeId(1)]),
+      outputA1
+    )
+    store.setNodeOutputsByExecutionId(
+      createNodeExecutionId([toNodeId(3)]),
+      outputA2
+    )
+
+    // --- Switch away: store() then clean ---
+    const tabASnapshot = store.snapshotOutputs()
+    store.resetAllOutputsAndPreviews()
+
+    expect(Object.keys(store.nodeOutputs)).toHaveLength(0)
+    expect(Object.keys(app.nodeOutputs)).toHaveLength(0)
+
+    // Tab B: fresh empty workflow (no outputs)
+    const tabBSnapshot = store.snapshotOutputs()
+    expect(Object.keys(tabBSnapshot)).toHaveLength(0)
+
+    // --- Switch back to Tab A: store Tab B then restore Tab A ---
+    store.resetAllOutputsAndPreviews()
+    store.restoreOutputs(tabASnapshot)
+
+    // Tab A's outputs should be fully restored
+    expect(store.nodeOutputs['1']).toStrictEqual(outputA1)
+    expect(store.nodeOutputs['3']).toStrictEqual(outputA2)
+    expect(app.nodeOutputs['1']).toStrictEqual(outputA1)
+    expect(app.nodeOutputs['3']).toStrictEqual(outputA2)
+
+    // New execution should still work after restore
+    const newOutput = createMockOutputs([{ filename: 'new.png' }])
+    store.setNodeOutputsByExecutionId(
+      createNodeExecutionId([toNodeId(5)]),
+      newOutput
+    )
+    expect(store.nodeOutputs['5']).toStrictEqual(newOutput)
+  })
+
+  it('should keep tab outputs independent across multiple switches', () => {
+    const store = useNodeOutputStore()
+
+    // Tab A: execute
+    const outputA = createMockOutputs([{ filename: 'tab_a.png' }])
+    store.setNodeOutputsByExecutionId(
+      createNodeExecutionId([toNodeId(1)]),
+      outputA
+    )
+    const snapshotA = store.snapshotOutputs()
+
+    // Switch to Tab B
+    store.resetAllOutputsAndPreviews()
+    const outputB = createMockOutputs([{ filename: 'tab_b.png' }])
+    store.setNodeOutputsByExecutionId(
+      createNodeExecutionId([toNodeId(1)]),
+      outputB
+    )
+    const snapshotB = store.snapshotOutputs()
+
+    // Switch back to Tab A
+    store.resetAllOutputsAndPreviews()
+    store.restoreOutputs(snapshotA)
+
+    expect(store.nodeOutputs['1']?.images?.[0]?.filename).toBe('tab_a.png')
+
+    // Switch back to Tab B
+    const snapshotA2 = store.snapshotOutputs()
+    store.resetAllOutputsAndPreviews()
+    store.restoreOutputs(snapshotB)
+
+    expect(store.nodeOutputs['1']?.images?.[0]?.filename).toBe('tab_b.png')
+
+    // And back to Tab A again - still correct
+    store.resetAllOutputsAndPreviews()
+    store.restoreOutputs(snapshotA2)
+
+    expect(store.nodeOutputs['1']?.images?.[0]?.filename).toBe('tab_a.png')
+  })
+
+  it('should return a deep clone from snapshotOutputs', () => {
+    const store = useNodeOutputStore()
+
+    const output = createMockOutputs([{ filename: 'a.png' }])
+    store.setNodeOutputsByExecutionId(
+      createNodeExecutionId([toNodeId(1)]),
+      output
+    )
+
+    const snapshot = store.snapshotOutputs()
+
+    // Mutate the snapshot
+    snapshot['1'].images![0].filename = 'mutated.png'
+    snapshot['99'] = createMockOutputs([{ filename: 'new.png' }])
+
+    // Store should be unchanged
+    expect(store.nodeOutputs['1']?.images?.[0]?.filename).toBe('a.png')
+    expect(app.nodeOutputs['1']?.images?.[0]?.filename).toBe('a.png')
+    expect(store.nodeOutputs['99']).toBeUndefined()
+  })
+})
+
+describe('nodeOutputStore resetAllOutputsAndPreviews', () => {
+  beforeEach(() => {
+    app.nodeOutputs = {}
+    app.nodePreviewImages = {}
+  })
+
+  it('should clear all outputs and previews for multiple nodes', () => {
+    const store = useNodeOutputStore()
+
+    store.setNodeOutputsByExecutionId(
+      createNodeExecutionId([toNodeId(1)]),
+      createMockOutputs([{ filename: 'a.png' }])
+    )
+    store.setNodeOutputsByExecutionId(
+      createNodeExecutionId([toNodeId(2)]),
+      createMockOutputs([{ filename: 'b.png' }])
+    )
+    store.setNodeOutputsByExecutionId(
+      createNodeExecutionId([toNodeId(3)]),
+      createMockOutputs([{ filename: 'c.png', type: 'input' }])
+    )
+
+    expect(Object.keys(store.nodeOutputs)).toHaveLength(3)
+    expect(Object.keys(app.nodeOutputs)).toHaveLength(3)
+
+    store.resetAllOutputsAndPreviews()
+
+    expect(Object.keys(store.nodeOutputs)).toHaveLength(0)
+    expect(Object.keys(app.nodeOutputs)).toHaveLength(0)
+    expect(Object.keys(app.nodePreviewImages)).toHaveLength(0)
+  })
+})
+
+describe('nodeOutputStore restoreOutputs + execution interaction', () => {
+  beforeEach(() => {
+    app.nodeOutputs = {}
+    app.nodePreviewImages = {}
+  })
+
+  it('should allow execution to update outputs after restore', () => {
+    const store = useNodeOutputStore()
+
+    // Simulate tab restore with existing input preview
+    const inputOutput = createMockOutputs([
+      { filename: 'uploaded.png', subfolder: '', type: 'input' }
+    ])
+    const savedOutputs: Record<string, ExecutedWsMessage['output']> = {
+      '3': inputOutput
+    }
+    store.restoreOutputs(savedOutputs)
+
+    expect(store.nodeOutputs['3']).toStrictEqual(inputOutput)
+
+    // Simulate execution sending new output for a different node
+    const execOutput = createMockOutputs([
+      { filename: 'ComfyUI_00001.png', subfolder: '', type: 'temp' }
+    ])
+    store.setNodeOutputsByExecutionId(
+      createNodeExecutionId([toNodeId(4)]),
+      execOutput
+    )
+
+    // Both should be present
+    expect(store.nodeOutputs['3']).toStrictEqual(inputOutput)
+    expect(store.nodeOutputs['4']).toStrictEqual(execOutput)
+    expect(app.nodeOutputs['3']).toStrictEqual(inputOutput)
+    expect(app.nodeOutputs['4']).toStrictEqual(execOutput)
+  })
+
+  it('should overwrite existing output when execution sends new data for same node', () => {
+    const store = useNodeOutputStore()
+
+    // Restore with input preview
+    const inputOutput = createMockOutputs([
+      { filename: 'uploaded.png', subfolder: '', type: 'input' }
+    ])
+    store.restoreOutputs({ '3': inputOutput })
+
+    // Execution sends new output for the same node (non-merge)
+    const execOutput = createMockOutputs([
+      { filename: 'result.png', subfolder: '', type: 'temp' }
+    ])
+    store.setNodeOutputsByExecutionId(
+      createNodeExecutionId([toNodeId(3)]),
+      execOutput
+    )
+
+    // On current main (without PR #9123 guard), execution overwrites
+    expect(store.nodeOutputs['3']).toStrictEqual(execOutput)
+    expect(app.nodeOutputs['3']).toStrictEqual(execOutput)
+  })
+})
+
+describe('nodeOutputStore merge mode interactions', () => {
+  beforeEach(() => {
+    app.nodeOutputs = {}
+    app.nodePreviewImages = {}
+  })
+
+  it('should merge new images with existing input preview images', () => {
+    const store = useNodeOutputStore()
+
+    // Set initial input preview
+    const inputOutput = createMockOutputs([
+      { filename: 'uploaded.png', subfolder: '', type: 'input' }
+    ])
+    store.setNodeOutputsByExecutionId(
+      createNodeExecutionId([toNodeId(3)]),
+      inputOutput
+    )
+
+    // Merge new execution images
+    const execOutput = createMockOutputs([
+      { filename: 'result.png', subfolder: '', type: 'temp' }
+    ])
+    store.setNodeOutputsByExecutionId(
+      createNodeExecutionId([toNodeId(3)]),
+      execOutput,
+      {
+        merge: true
+      }
+    )
+
+    // Should have both images concatenated
+    expect(store.nodeOutputs['3']?.images).toHaveLength(2)
+    expect(app.nodeOutputs['3']?.images).toHaveLength(2)
+    expect(store.nodeOutputs['3']?.images?.[0]?.filename).toBe('uploaded.png')
+    expect(store.nodeOutputs['3']?.images?.[1]?.filename).toBe('result.png')
+  })
+
+  it('should not duplicate when merge is called with empty images array', () => {
+    const store = useNodeOutputStore()
+
+    // Set initial input preview
+    const inputOutput = createMockOutputs([
+      { filename: 'uploaded.png', subfolder: '', type: 'input' }
+    ])
+    store.setNodeOutputsByExecutionId(
+      createNodeExecutionId([toNodeId(3)]),
+      inputOutput
+    )
+
+    // Merge with empty images — the input-preview guard (lines 166-177)
+    // copies existing input images into the incoming outputs before the
+    // merge concat runs, resulting in duplication.
+    const emptyOutput = createMockOutputs([])
+    store.setNodeOutputsByExecutionId(
+      createNodeExecutionId([toNodeId(3)]),
+      emptyOutput,
+      {
+        merge: true
+      }
+    )
+
+    expect(store.nodeOutputs['3']?.images).toHaveLength(2)
+    expect(store.nodeOutputs['3']?.images?.[0]?.filename).toBe('uploaded.png')
+    expect(store.nodeOutputs['3']?.images?.[1]?.filename).toBe('uploaded.png')
+  })
+})
+
+describe('nodeOutputStore setNodeOutputs (widget path)', () => {
+  beforeEach(() => {
+    app.nodeOutputs = {}
+    app.nodePreviewImages = {}
+  })
+
+  it('should return early for empty string filename', () => {
+    const store = useNodeOutputStore()
+    const node = createMockNode({ id: 5 })
+
+    store.setNodeOutputs(node, '')
+
+    expect(store.nodeOutputs['5']).toBeUndefined()
+    expect(app.nodeOutputs['5']).toBeUndefined()
+  })
+
+  it('should return early for null node', () => {
+    const store = useNodeOutputStore()
+
+    store.setNodeOutputs(fromAny<LGraphNode, unknown>(null), 'test.png')
+
+    expect(Object.keys(store.nodeOutputs)).toHaveLength(0)
+  })
+
+  it('should set outputs for valid string filename', () => {
+    const store = useNodeOutputStore()
+    const node = createMockNode({ id: 5 })
+
+    store.setNodeOutputs(node, 'test.png')
+
+    expect(store.nodeOutputs['5']).toBeDefined()
+    expect(store.nodeOutputs['5']?.images).toHaveLength(1)
+    expect(store.nodeOutputs['5']?.images?.[0]?.filename).toBe('test.png')
+    expect(store.nodeOutputs['5']?.images?.[0]?.type).toBe('input')
+  })
+
+  it('previews an annotated widget value from its own directory', () => {
+    const store = useNodeOutputStore()
+    const node = createMockNode({ id: 5, comfyClass: 'LoadImage' })
+
+    store.setNodeOutputs(node, 'nested/preview.png [temp]', {
+      isAnimated: true
+    })
+
+    expect(store.nodeOutputs['5']?.images?.[0]).toMatchObject({
+      filename: 'preview.png [temp]',
+      subfolder: 'nested',
+      type: 'input'
+    })
+    const previewUrl = new URL(
+      store.getNodeImageUrls(node)?.[0] ?? '',
+      window.location.origin
+    )
+    expect(store.nodeOutputs['5']?.animated).toEqual([true])
+    expect(previewUrl.searchParams.get('filename')).toBe('preview.png')
+    expect(previewUrl.searchParams.get('subfolder')).toBe('nested')
+    expect(previewUrl.searchParams.get('type')).toBe('temp')
+  })
+
+  it('leaves node images unchanged for preview change detection', () => {
+    const store = useNodeOutputStore()
+    const images = [{ filename: 'previous.png' }]
+    const node = createMockNode({ id: 5, images })
+
+    store.setNodeOutputs(node, 'test.png')
+
+    expect(node.images).toBe(images)
+    expect(node.images).not.toBe(store.nodeOutputs['5']?.images)
+  })
+
+  it('should skip empty array of filenames after createOutputs', () => {
+    const store = useNodeOutputStore()
+    const node = createMockNode({ id: 5 })
+
+    store.setNodeOutputs(node, [])
+
+    expect(store.nodeOutputs['5']).toBeUndefined()
+    expect(app.nodeOutputs['5']).toBeUndefined()
+  })
+})
+
+describe('nodeOutputStore syncLegacyNodeImgs', () => {
+  beforeEach(() => {
+    LiteGraph.vueNodesMode = false
+  })
+
+  it('should not sync when vueNodesMode is disabled', () => {
+    const store = useNodeOutputStore()
+    const mockNode = createMockNode({ id: 1 })
+    const mockImg = document.createElement('img')
+
+    vi.mocked(litegraphUtil.resolveNode).mockReturnValue(mockNode)
+
+    store.syncLegacyNodeImgs(toNodeId(1), mockImg, 0)
+
+    expect(mockNode.imgs).toBeUndefined()
+    expect(mockNode.imageIndex).toBeUndefined()
+  })
+
+  it('should sync node.imgs when vueNodesMode is enabled', () => {
+    LiteGraph.vueNodesMode = true
+    const store = useNodeOutputStore()
+    const mockNode = createMockNode({ id: 1 })
+    const mockImg = document.createElement('img')
+
+    vi.mocked(litegraphUtil.resolveNode).mockReturnValue(mockNode)
+
+    store.syncLegacyNodeImgs(toNodeId(1), mockImg, 0)
+
+    expect(mockNode.imgs).toEqual([mockImg])
+    expect(mockNode.imageIndex).toBe(0)
+  })
+
+  it('should sync with correct activeIndex', () => {
+    LiteGraph.vueNodesMode = true
+    const store = useNodeOutputStore()
+    const mockNode = createMockNode({ id: 42 })
+    const mockImg = document.createElement('img')
+
+    vi.mocked(litegraphUtil.resolveNode).mockReturnValue(mockNode)
+
+    store.syncLegacyNodeImgs(toNodeId(42), mockImg, 3)
+
+    expect(mockNode.imgs).toEqual([mockImg])
+    expect(mockNode.imageIndex).toBe(3)
+  })
+
+  it('should handle string nodeId', () => {
+    LiteGraph.vueNodesMode = true
+    const store = useNodeOutputStore()
+    const mockNode = createMockNode({ id: 123 })
+    const mockImg = document.createElement('img')
+
+    vi.mocked(litegraphUtil.resolveNode).mockReturnValue(mockNode)
+
+    store.syncLegacyNodeImgs(toNodeId('123'), mockImg, 0)
+
+    expect(litegraphUtil.resolveNode).toHaveBeenCalledWith('123')
+    expect(mockNode.imgs).toEqual([mockImg])
+  })
+
+  it('should not throw when node is not found', () => {
+    LiteGraph.vueNodesMode = true
+    const store = useNodeOutputStore()
+    const mockImg = document.createElement('img')
+
+    vi.mocked(litegraphUtil.resolveNode).mockReturnValue(undefined)
+
+    expect(() =>
+      store.syncLegacyNodeImgs(toNodeId(999), mockImg, 0)
+    ).not.toThrow()
+  })
+
+  it('should default activeIndex to 0', () => {
+    LiteGraph.vueNodesMode = true
+    const store = useNodeOutputStore()
+    const mockNode = createMockNode({ id: 1 })
+    const mockImg = document.createElement('img')
+
+    vi.mocked(litegraphUtil.resolveNode).mockReturnValue(mockNode)
+
+    store.syncLegacyNodeImgs(toNodeId(1), mockImg)
+
+    expect(mockNode.imageIndex).toBe(0)
+  })
+
+  it('should sync node.imgs when node is inside a subgraph', () => {
+    LiteGraph.vueNodesMode = true
+    const store = useNodeOutputStore()
+    const mockNode = createMockNode({ id: 5 })
+    const mockImg = document.createElement('img')
+
+    vi.mocked(litegraphUtil.resolveNode).mockReturnValue(mockNode)
+
+    store.syncLegacyNodeImgs(toNodeId(5), mockImg, 0)
+
+    expect(mockNode.imgs).toEqual([mockImg])
+    expect(mockNode.imageIndex).toBe(0)
+  })
+})

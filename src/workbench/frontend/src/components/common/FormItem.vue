@@ -1,0 +1,127 @@
+<!-- A generalized form item for rendering in a form. -->
+<template>
+  <div class="flex min-h-8 flex-row items-center gap-2">
+    <div class="flex grow items-center">
+      <span
+        :id="`${props.id}-label`"
+        class="text-sm text-muted"
+        :class="props.labelClass"
+      >
+        <slot name="name-prefix" />
+        {{ props.item.name }}
+        <Tooltip v-if="props.item.tooltip">
+          <TooltipTrigger as-child>
+            <i class="pi pi-info-circle bg-transparent" />
+          </TooltipTrigger>
+          <TooltipContent>{{ props.item.tooltip }}</TooltipContent>
+        </Tooltip>
+        <slot name="name-suffix" />
+      </span>
+    </div>
+    <div class="flex justify-end">
+      <component
+        :is="markRaw(getFormComponent(props.item))"
+        :id="props.id"
+        v-model:model-value="formValue"
+        :aria-labelledby="`${props.id}-label`"
+        v-bind="getFormAttrs(props.item)"
+      />
+    </div>
+  </div>
+</template>
+
+<script setup lang="ts">
+import { markRaw } from 'vue'
+import type { Component } from 'vue'
+
+import BackgroundImageUpload from '@/components/common/BackgroundImageUpload.vue'
+import CustomFormValue from '@/components/common/CustomFormValue.vue'
+import FormColorPicker from '@/components/common/FormColorPicker.vue'
+import FormImageUpload from '@/components/common/FormImageUpload.vue'
+import FormNumberField from '@/components/common/FormNumberField.vue'
+import FormRadioGroup from '@/components/common/FormRadioGroup.vue'
+import InputKnob from '@/components/common/InputKnob.vue'
+import InputSlider from '@/components/common/InputSlider.vue'
+import UrlInput from '@/components/common/UrlInput.vue'
+import Input from '@/components/ui/input/Input.vue'
+import SingleSelect from '@/components/ui/single-select/SingleSelect.vue'
+import Switch from '@/components/ui/switch/Switch.vue'
+import Tooltip from '@/components/ui/tooltip/Tooltip.vue'
+import TooltipContent from '@/components/ui/tooltip/TooltipContent.vue'
+import TooltipTrigger from '@/components/ui/tooltip/TooltipTrigger.vue'
+import type { FormItem } from '@/platform/settings/types'
+
+const formValue = defineModel<unknown>('formValue')
+const props = defineProps<{
+  item: FormItem
+  id?: string
+  labelClass?: string | Record<string, boolean>
+}>()
+
+function getFormAttrs(item: FormItem) {
+  const attrs = { ...item.attrs }
+  const inputType = item.type
+  if (typeof inputType === 'function') {
+    attrs['renderFunction'] = () =>
+      inputType(
+        props.item.name,
+        (v: unknown) => (formValue.value = v),
+        formValue.value,
+        item.attrs
+      )
+  }
+  switch (item.type) {
+    case 'combo':
+    case 'radio': {
+      const options =
+        typeof item.options === 'function'
+          ? item.options(formValue.value)
+          : item.options
+      attrs['options'] =
+        item.type === 'combo'
+          ? options?.map((option) =>
+              typeof option === 'string'
+                ? { name: option, value: option }
+                : { name: option.text, value: option.value ?? option.text }
+            )
+          : options
+      attrs['class'] = 'w-44'
+      break
+    }
+    case 'text':
+      attrs['class'] = 'w-44'
+      break
+  }
+  return attrs
+}
+
+function getFormComponent(item: FormItem): Component {
+  if (typeof item.type === 'function') {
+    return CustomFormValue
+  }
+  switch (item.type) {
+    case 'boolean':
+      return Switch
+    case 'number':
+      return FormNumberField
+    case 'slider':
+      return InputSlider
+    case 'knob':
+      return InputKnob
+    case 'combo':
+      return SingleSelect
+    case 'radio':
+      return FormRadioGroup
+    case 'image':
+      return FormImageUpload
+    case 'color':
+      return FormColorPicker
+    case 'url':
+      return UrlInput
+    case 'backgroundImage':
+      return BackgroundImageUpload
+    default:
+      return Input
+  }
+}
+</script>

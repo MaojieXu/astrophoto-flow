@@ -14,6 +14,10 @@ Every bilingual pair is authored by hand: one pass writes both sides, and the pa
 
 Credentials come from `APF_TRANSLATION_*` variables or a root `.env` that stays git-ignored; a missing key fails the command instead of skipping it, every call writes a record under `.artifacts/translations/` with the model, the prompt path, and both content hashes, and [verify-translation-prompt](../../../scripts/verify-translation-prompt.ts) joins the gates so the prompt asset and the fixture list are checked like any other contract.
 
+## Gateway routing
+
+The first real call reached a gateway that bills per token and answered `402 Payment Required` against an empty balance while a subscription was active, because the path decides the billing source: the plain inference path spends prepaid balance, the Go path spends the subscription. The default base URL is the Go path, a call through it reports `billing_source: go`, and every request carries `x-opencode-session` so the gateway can route and cache. Model identifiers differ per route, so the model stays a variable rather than a constant.
+
 ## Alternatives considered
 
 **Leave translation entirely manual.** Rejected: the gate is good at structure and blind to prose, so every new page keeps a long hand pass that no check verifies anyway.

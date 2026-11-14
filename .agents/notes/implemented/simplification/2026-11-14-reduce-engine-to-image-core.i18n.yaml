@@ -1,0 +1,22 @@
+# Bilingual-pair consistency record for .agents/notes/implemented/simplification/2026-11-14-reduce-engine-to-image-core.md ↔ .agents/notes/implemented/simplification/2026-11-14-reduce-engine-to-image-core.zh.md: per heading
+# section, a hash of its English and Chinese blocks outside code blocks and generated regions.
+# After editing either side, bring the other along and re-record with:
+#   pnpm run verify-translation-pairing --write .agents/notes/implemented/simplification/2026-11-14-reduce-engine-to-image-core.md
+/agent-note-reduce-the-vendored-engine-to-an-image-processing-core:
+  en: 03c063d1d7e42977
+  zh: 235acb5408fe472e
+/agent-note-reduce-the-vendored-engine-to-an-image-processing-core/problem:
+  en: 6b37dfc205419650
+  zh: 89280a6e63df7c21
+/agent-note-reduce-the-vendored-engine-to-an-image-processing-core/decision:
+  en: 894f78e5f6448506
+  zh: b87cb52dd9a69a43
+/agent-note-reduce-the-vendored-engine-to-an-image-processing-core/behaviour-that-changed:
+  en: 2246667bf424b432
+  zh: 5bd6520cd7f1af9a
+/agent-note-reduce-the-vendored-engine-to-an-image-processing-core/alternatives-considered:
+  en: 35953b232b7966af
+  zh: 0c653cb728f3da46
+/agent-note-reduce-the-vendored-engine-to-an-image-processing-core/consequences:
+  en: 592c6b73b6c6aee2
+  zh: 84c00056073bbb16

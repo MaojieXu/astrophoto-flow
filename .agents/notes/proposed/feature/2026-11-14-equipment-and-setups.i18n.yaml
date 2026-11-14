@@ -1,0 +1,37 @@
+# Bilingual-pair consistency record for .agents/notes/proposed/feature/2026-11-14-equipment-and-setups.md ↔ .agents/notes/proposed/feature/2026-11-14-equipment-and-setups.zh.md: per heading
+# section, a hash of its English and Chinese blocks outside code blocks and generated regions.
+# After editing either side, bring the other along and re-record with:
+#   pnpm run verify-translation-pairing --write .agents/notes/proposed/feature/2026-11-14-equipment-and-setups.md
+/agent-note-equipment-is-a-snapshot-not-a-live-lookup:
+  en: 36566f91a036583f
+  zh: e7a092b88d09cb8f
+/agent-note-equipment-is-a-snapshot-not-a-live-lookup/problem:
+  en: b6e448ab433556ac
+  zh: 98f745ca55c3a41a
+/agent-note-equipment-is-a-snapshot-not-a-live-lookup/proposal:
+  en: b9482544b2ceec98
+  zh: c91b36f2a1099405
+/agent-note-equipment-is-a-snapshot-not-a-live-lookup/proposal/definitions:
+  en: 5b721692e7b04ed4
+  zh: f551518b5825a1f7
+/agent-note-equipment-is-a-snapshot-not-a-live-lookup/proposal/setups:
+  en: 7510261bde621b33
+  zh: 71675bfcafaeb5ca
+/agent-note-equipment-is-a-snapshot-not-a-live-lookup/proposal/the-asset-snapshot:
+  en: b3a5dce0ea12fb20
+  zh: 819785f2f1b1effb
+/agent-note-equipment-is-a-snapshot-not-a-live-lookup/proposal/import-defaults:
+  en: d776e2e1ec8ef08d
+  zh: f7b8a370a4bb2027
+/agent-note-equipment-is-a-snapshot-not-a-live-lookup/proposal/deletion-and-archival:
+  en: 4d07599a98d67b58
+  zh: 810f97eb7424c310
+/agent-note-equipment-is-a-snapshot-not-a-live-lookup/alternatives-considered:
+  en: a784c17c3a7ce1ae
+  zh: 02edeeda5fae7bf5
+/agent-note-equipment-is-a-snapshot-not-a-live-lookup/acceptance-criteria:
+  en: 2b5c893a96d44a17
+  zh: 934377196b0c476d
+/agent-note-equipment-is-a-snapshot-not-a-live-lookup/risks:
+  en: 819b06e3a8068647
+  zh: b99d02f661a9bddd

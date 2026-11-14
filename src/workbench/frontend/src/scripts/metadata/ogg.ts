@@ -1,0 +1,60 @@
+import type {
+  ComfyApiWorkflow,
+  ComfyWorkflowJSON
+} from '@/platform/workflow/validation/schemas/workflowSchema'
+import { readFileAsArrayBuffer } from '@/utils/fileUtil'
+import { parseJsonWithNonFinite } from '@/utils/jsonUtil'
+
+const NULL = '\0'
+
+/** Extracts the JSON text from a `<key>={...}` Vorbis comment ending at a null byte. */
+function readVorbisCommentJson(header: string, key: string) {
+  const commentStart = header.indexOf(`${key}={`)
+  if (commentStart === -1) return undefined
+  const jsonStart = commentStart + key.length + '='.length
+  const firstClose = header.indexOf('}', jsonStart)
+  if (firstClose === -1) return undefined
+  const commentEnd = header.indexOf(NULL, firstClose)
+  if (commentEnd === -1) return undefined
+  return header.slice(jsonStart, commentEnd).match(/\{.*\}/)?.[0]
+}
+
+export async function getOggMetadata(file: File) {
+  const arrayBuffer = await readFileAsArrayBuffer(file)
+  if (!arrayBuffer) return { prompt: undefined, workflow: undefined }
+  const signature = String.fromCharCode(...new Uint8Array(arrayBuffer, 0, 4))
+  if (signature !== 'OggS') console.error('Invalid file signature.')
+  let oggs = 0
+  let header = ''
+  while (header.length < arrayBuffer.byteLength) {
+    const page = String.fromCharCode(
+      ...new Uint8Array(
+        arrayBuffer,
+        header.length,
+        Math.min(4096, arrayBuffer.byteLength - header.length)
+      )
+    )
+    if (page.match('OggS\u0000')) oggs++
+    header += page
+    if (oggs > 1) break
+  }
+  let workflow: ComfyWorkflowJSON | undefined
+  let prompt: ComfyApiWorkflow | undefined
+  const prompt_s = readVorbisCommentJson(header, 'prompt')
+  if (prompt_s) {
+    try {
+      prompt = parseJsonWithNonFinite<ComfyApiWorkflow>(prompt_s)
+    } catch (e) {
+      console.error('Failed to parse Ogg prompt metadata', e)
+    }
+  }
+  const workflow_s = readVorbisCommentJson(header, 'workflow')
+  if (workflow_s) {
+    try {
+      workflow = parseJsonWithNonFinite<ComfyWorkflowJSON>(workflow_s)
+    } catch (e) {
+      console.error('Failed to parse Ogg workflow metadata', e)
+    }
+  }
+  return { prompt, workflow }
+}

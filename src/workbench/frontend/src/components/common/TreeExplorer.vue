@@ -1,0 +1,334 @@
+<template>
+  <UiTree
+    v-bind="$attrs"
+    v-model:expanded="expandedNodeKeys"
+    v-model:selected="selectedNode"
+    :class="cn('tree-explorer px-2', className)"
+    :items="renderedRoot.children ?? []"
+    :get-key="(node) => node.key"
+    :get-children="(node) => (node.leaf ? undefined : (node.children ?? []))"
+  >
+    <template #default="{ flattenItems }">
+      <UiTreeItem
+        v-for="item in flattenItems"
+        v-slot="{ isHovered }"
+        :key="item._id"
+        class="tree-explorer-item"
+        :value="item.value"
+        :level="item.level"
+        :aria-label="item.value.label"
+        :data-parent-label="item.parentItem?.label"
+        :data-tree-node-type="item.value.type"
+        @select="preventUnboundSelection"
+        @click="onNodeContentClick($event, item.value)"
+        @contextmenu="handleContextMenu($event, item.value)"
+      >
+        <span class="relative size-4 shrink-0">
+          <i
+            :class="
+              cn(
+                item.value.icon,
+                'tree-explorer-node-icon size-4 text-muted-foreground'
+              )
+            "
+            :style="{ color: item.value.iconColor }"
+          />
+          <span
+            v-if="item.value.iconImage"
+            data-testid="tree-node-icon-image"
+            class="absolute inset-0 rounded-xs bg-cover bg-center"
+            :style="{ backgroundImage: `url(${item.value.iconImage})` }"
+          />
+        </span>
+        <div class="flex min-w-0 flex-1 items-center">
+          <slot
+            v-if="item.value.type === 'folder'"
+            name="folder"
+            :node="item.value"
+          >
+            <TreeExplorerTreeNode :node="item.value" />
+          </slot>
+          <slot v-else name="node" :node="item.value">
+            <TreeExplorerTreeNode :node="item.value" />
+          </slot>
+        </div>
+        <div
+          v-if="isHovered && item.value.leaf && $slots.preview"
+          ref="preview"
+          data-testid="tree-item-preview"
+          class="pointer-events-none fixed z-1001"
+          :style="previewStyle"
+        >
+          <slot name="preview" :node="item.value" />
+        </div>
+      </UiTreeItem>
+    </template>
+  </UiTree>
+  <ContextMenu ref="menu" :model="menuItems" />
+</template>
+<script setup lang="ts" generic="T">
+import { useElementBounding, useElementSize, useWindowSize } from '@vueuse/core'
+import { computed, provide, ref, shallowRef, useTemplateRef } from 'vue'
+import { useI18n } from 'vue-i18n'
+
+import TreeExplorerTreeNode from '@/components/common/TreeExplorerTreeNode.vue'
+import ContextMenu from '@/components/ui/menu/ContextMenu.vue'
+import type { MenuItem, MenuItemCommandEvent } from '@/components/ui/menu/types'
+import UiTree from '@/components/ui/tree/Tree.vue'
+import UiTreeItem from '@/components/ui/tree/TreeItem.vue'
+import { useTreeFolderOperations } from '@/composables/tree/useTreeFolderOperations'
+import { useErrorHandling } from '@/composables/useErrorHandling'
+import { useSettingStore } from '@/platform/settings/settingStore'
+import {
+  InjectKeyExpandedKeys,
+  InjectKeyHandleEditLabelFunction
+} from '@/types/treeExplorerTypes'
+import type {
+  RenderedTreeExplorerNode,
+  TreeExplorerNode
+} from '@/types/treeExplorerTypes'
+import { combineTrees, findNodeByKey } from '@/utils/treeUtil'
+import { cn } from '@comfyorg/tailwind-utils'
+
+defineOptions({
+  inheritAttrs: false
+})
+
+const expandedKeys = defineModel<Record<string, boolean>>('expandedKeys', {
+  required: true
+})
+provide(InjectKeyExpandedKeys, expandedKeys)
+const selectionKeys = defineModel<Record<string, boolean>>('selectionKeys')
+// Tracks whether the caller has set the selectionKeys model.
+const storeSelectionKeys = selectionKeys.value !== undefined
+
+function preventUnboundSelection(event: Event) {
+  if (!storeSelectionKeys) event.preventDefault()
+}
+
+const { root, class: className } = defineProps<{
+  root: TreeExplorerNode<T>
+  class?: string
+}>()
+const emit = defineEmits<{
+  (e: 'nodeClick', node: RenderedTreeExplorerNode<T>, event: MouseEvent): void
+  (e: 'nodeDelete', node: RenderedTreeExplorerNode<T>): void
+  (e: 'contextMenu', node: RenderedTreeExplorerNode<T>, event: MouseEvent): void
+}>()
+
+const {
+  newFolderNode,
+  getAddFolderMenuItem,
+  handleFolderCreation,
+  addFolderCommand
+} = useTreeFolderOperations<T>(
+  /* expandNode */ (node: TreeExplorerNode<T>) => {
+    expandedKeys.value = { ...expandedKeys.value, [node.key]: true }
+  }
+)
+
+const renderedRoot = computed<RenderedTreeExplorerNode<T>>(() => {
+  const renderedRoot = fillNodeInfo(root)
+  return newFolderNode.value
+    ? combineTrees(renderedRoot, newFolderNode.value)
+    : renderedRoot
+})
+const expandedNodeKeys = computed({
+  get: () =>
+    Object.entries(expandedKeys.value)
+      .filter(([, expanded]) => expanded)
+      .map(([key]) => key),
+  set: (keys: string[]) => {
+    expandedKeys.value = Object.fromEntries(keys.map((key) => [key, true]))
+  }
+})
+const selectedNode = computed({
+  get: () => {
+    const key = Object.keys(selectionKeys.value ?? {}).find(
+      (key) => selectionKeys.value?.[key]
+    )
+    return key
+      ? (findNodeByKey(renderedRoot.value, key) ?? undefined)
+      : undefined
+  },
+  set: (node: RenderedTreeExplorerNode<T> | undefined) => {
+    selectionKeys.value = node ? { [node.key]: true } : {}
+  }
+})
+const getTreeNodeIcon = (node: TreeExplorerNode<T>) => {
+  if (node.getIcon) {
+    const icon = node.getIcon()
+    if (icon) {
+      return icon
+    }
+  } else if (node.icon) {
+    return node.icon
+  }
+  // node.icon is undefined
+  if (node.leaf) {
+    return 'pi pi-file'
+  }
+  const isExpanded = expandedKeys.value?.[node.key] ?? false
+  return isExpanded ? 'pi pi-folder-open' : 'pi pi-folder'
+}
+const fillNodeInfo = (
+  node: TreeExplorerNode<T>
+): RenderedTreeExplorerNode<T> => {
+  const children = node.children?.map(fillNodeInfo) ?? []
+  const totalLeaves = node.leaf
+    ? 1
+    : children.reduce((acc, child) => acc + child.totalLeaves, 0)
+  return {
+    ...node,
+    icon: getTreeNodeIcon(node),
+    iconColor: node.getIconColor?.(),
+    iconImage: node.getIconImage?.(),
+    children,
+    type: node.leaf ? 'node' : 'folder',
+    totalLeaves,
+    badgeText: node.getBadgeText ? node.getBadgeText() : undefined,
+    isEditingLabel: node.key === renameEditingNode.value?.key
+  }
+}
+const onNodeContentClick = async (
+  e: MouseEvent,
+  node: RenderedTreeExplorerNode<T>
+) => {
+  await node.handleClick?.(e)
+  emit('nodeClick', node, e)
+}
+const menu = ref<InstanceType<typeof ContextMenu> | null>(null)
+const menuTargetNode = shallowRef<RenderedTreeExplorerNode<T> | null>(null)
+const extraMenuItems = computed(() => {
+  const node = menuTargetNode.value
+  return node?.contextMenuItems
+    ? typeof node.contextMenuItems === 'function'
+      ? node.contextMenuItems(node)
+      : node.contextMenuItems
+    : []
+})
+const renameEditingNode = shallowRef<RenderedTreeExplorerNode<T> | null>(null)
+const errorHandling = useErrorHandling()
+const handleNodeLabelEdit = async (
+  n: RenderedTreeExplorerNode,
+  newName: string
+) => {
+  const node = n as RenderedTreeExplorerNode<T>
+  await errorHandling.wrapWithErrorHandlingAsync(
+    async () => {
+      if (node.key === newFolderNode.value?.key) {
+        await handleFolderCreation(newName)
+      } else {
+        await node.handleRename?.(newName)
+      }
+    },
+    node.handleError,
+    () => {
+      renameEditingNode.value = null
+    }
+  )()
+}
+provide(InjectKeyHandleEditLabelFunction, handleNodeLabelEdit)
+
+const { t } = useI18n()
+const renameCommand = (node: RenderedTreeExplorerNode<T>) => {
+  renameEditingNode.value = node
+}
+const deleteCommand = async (node: RenderedTreeExplorerNode<T>) => {
+  await node.handleDelete?.()
+  emit('nodeDelete', node)
+}
+
+const menuItems = computed<MenuItem[]>(() => {
+  const node = menuTargetNode.value
+  return [
+    getAddFolderMenuItem(node),
+    {
+      label: t('g.rename'),
+      icon: 'pi pi-file-edit',
+      command: () => {
+        if (node) {
+          renameCommand(node)
+        }
+      },
+      visible: node?.handleRename !== undefined
+    },
+    {
+      label: t('g.delete'),
+      icon: 'pi pi-trash',
+      command: async () => {
+        if (node) {
+          await deleteCommand(node)
+        }
+      },
+      visible: node?.handleDelete !== undefined
+    },
+    ...extraMenuItems.value
+  ].map((menuItem: MenuItem) =>
+    menuItem.command
+      ? {
+          ...menuItem,
+          command: wrapCommandWithErrorHandler(menuItem.command)
+        }
+      : menuItem
+  )
+})
+
+const handleContextMenu = (
+  e: MouseEvent,
+  node: RenderedTreeExplorerNode<T>
+) => {
+  menuTargetNode.value = node
+  emit('contextMenu', node, e)
+  if (menuItems.value.filter((item) => item.visible).length > 0) {
+    menu.value?.show(e)
+  }
+}
+
+const wrapCommandWithErrorHandler = (
+  command: (event: MenuItemCommandEvent) => unknown
+) => {
+  const node = menuTargetNode.value
+  return errorHandling.wrapWithErrorHandlingAsync(command, node?.handleError)
+}
+
+const PREVIEW_GAP = 16
+
+const previews = useTemplateRef<HTMLElement[]>('preview')
+const previewElement = computed(() => previews.value?.[0])
+const previewRow = useElementBounding(() =>
+  previewElement.value?.closest<HTMLElement>('[role="treeitem"]')
+)
+const previewSize = useElementSize(previewElement, undefined, {
+  box: 'border-box'
+})
+const { height: windowHeight } = useWindowSize()
+const settingStore = useSettingStore()
+const previewStyle = computed(() => {
+  const top = Math.max(
+    0,
+    Math.min(
+      previewRow.top.value,
+      windowHeight.value - previewSize.height.value - PREVIEW_GAP
+    )
+  )
+  const left =
+    settingStore.get('Comfy.Sidebar.Location') === 'right'
+      ? previewRow.left.value - previewSize.width.value - PREVIEW_GAP
+      : previewRow.right.value + PREVIEW_GAP
+  return { top: `${top}px`, left: `${left}px` }
+})
+
+defineExpose({
+  /**
+   * The command to add a folder to a node via the context menu
+   * @param targetNodeKey - The key of the node where the folder will be added under
+   */
+  addFolderCommand: (targetNodeKey: string) => {
+    const targetNode = findNodeByKey(renderedRoot.value, targetNodeKey)
+    if (targetNode) {
+      addFolderCommand(targetNode)
+    }
+  }
+})
+</script>

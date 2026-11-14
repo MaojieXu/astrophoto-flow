@@ -1,0 +1,37 @@
+# Bilingual-pair consistency record for .agents/notes/proposed/architecture/2026-11-14-managed-asset-ledger.md ↔ .agents/notes/proposed/architecture/2026-11-14-managed-asset-ledger.zh.md: per heading
+# section, a hash of its English and Chinese blocks outside code blocks and generated regions.
+# After editing either side, bring the other along and re-record with:
+#   pnpm run verify-translation-pairing --write .agents/notes/proposed/architecture/2026-11-14-managed-asset-ledger.md
+/agent-note-the-asset-ledger-is-the-only-record-of-an-original:
+  en: e27bc04f143e1cf7
+  zh: 3de650804383127e
+/agent-note-the-asset-ledger-is-the-only-record-of-an-original/problem:
+  en: 8907b342b0f94649
+  zh: 13506dae8ab505de
+/agent-note-the-asset-ledger-is-the-only-record-of-an-original/proposal:
+  en: e8010c733b7db101
+  zh: 4f22435fc7cf979c
+/agent-note-the-asset-ledger-is-the-only-record-of-an-original/proposal/the-record:
+  en: 7846d54d241cde84
+  zh: b0b6e4847953bf92
+/agent-note-the-asset-ledger-is-the-only-record-of-an-original/proposal/identity-and-content:
+  en: 537b5a9a8438f293
+  zh: f30b5d7220b906de
+/agent-note-the-asset-ledger-is-the-only-record-of-an-original/proposal/metadata-and-snapshots:
+  en: e28311e4ff4cead0
+  zh: e6a3261cb426ef85
+/agent-note-the-asset-ledger-is-the-only-record-of-an-original/proposal/input-consistency:
+  en: 1b08e97a2d81ef73
+  zh: 9e77140b4c48d877
+/agent-note-the-asset-ledger-is-the-only-record-of-an-original/proposal/what-the-engine-may-not-do:
+  en: ed2353af5e7166f9
+  zh: 175cd10fe2d9c63f
+/agent-note-the-asset-ledger-is-the-only-record-of-an-original/alternatives-considered:
+  en: 9a69c18238df2241
+  zh: 7b5dd1b3307a863a
+/agent-note-the-asset-ledger-is-the-only-record-of-an-original/acceptance-criteria:
+  en: ed18572616c35efa
+  zh: a0b44c415cb58440
+/agent-note-the-asset-ledger-is-the-only-record-of-an-original/risks:
+  en: e9b4db532b1982a8
+  zh: 34d81ffa1ae1baa2

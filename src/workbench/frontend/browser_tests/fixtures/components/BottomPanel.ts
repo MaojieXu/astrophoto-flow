@@ -1,0 +1,94 @@
+import type { Locator, Page } from '@playwright/test'
+
+import { TestIds } from '@e2e/fixtures/selectors'
+
+class ShortcutsTab {
+  readonly essentialsTab: Locator
+  readonly viewControlsTab: Locator
+  readonly manageButton: Locator
+  readonly keyBadges: Locator
+  readonly subcategoryTitles: Locator
+
+  constructor(readonly page: Page) {
+    this.essentialsTab = page.getByRole('tab', { name: /Essential/i })
+    this.viewControlsTab = page.getByRole('tab', { name: /View Controls/i })
+    this.manageButton = page.getByRole('button', { name: /Manage Shortcuts/i })
+    this.keyBadges = page.locator('.key-badge')
+    this.subcategoryTitles = page.locator('.subcategory-title')
+  }
+}
+
+class LogsTab {
+  readonly tab: Locator
+  readonly terminalRoot: Locator
+  readonly terminalHost: Locator
+  readonly copyButton: Locator
+  readonly errorMessage: Locator
+  readonly loadingSpinner: Locator
+  readonly xtermScreen: Locator
+
+  constructor(readonly page: Page) {
+    this.tab = page.getByRole('tab', { name: /Logs/i })
+    this.terminalRoot = page.getByTestId(TestIds.terminal.root)
+    this.terminalHost = page.getByTestId(TestIds.terminal.host)
+    this.copyButton = page.getByTestId(TestIds.terminal.copyButton)
+    this.errorMessage = page.getByTestId(TestIds.terminal.errorMessage)
+    this.loadingSpinner = page.getByTestId(TestIds.terminal.loadingSpinner)
+    this.xtermScreen = this.terminalHost.locator('.xterm-screen')
+  }
+}
+
+export class BottomPanel {
+  readonly root: Locator
+  readonly keyboardShortcutsButton: Locator
+  readonly toggleButton: Locator
+  readonly closeButton: Locator
+  readonly resizeHandle: Locator
+  readonly shortcuts: ShortcutsTab
+  readonly logs: LogsTab
+
+  constructor(readonly page: Page) {
+    this.root = page.locator('.bottom-panel')
+    this.keyboardShortcutsButton = page.getByRole('button', {
+      name: /Keyboard Shortcuts/i
+    })
+    this.toggleButton = page.getByRole('button', {
+      name: /Toggle Bottom Panel/i
+    })
+    this.closeButton = this.root.getByRole('button', { name: /^Close$/i })
+    this.resizeHandle = page.locator('#graph-canvas-panel + [role="separator"]')
+    this.shortcuts = new ShortcutsTab(page)
+    this.logs = new LogsTab(page)
+  }
+
+  async toggleLogs() {
+    await this.toggleButton.click()
+    await this.logs.tab.waitFor({ state: 'visible' })
+    if ((await this.logs.tab.getAttribute('aria-selected')) !== 'true') {
+      await this.logs.tab.click()
+    }
+  }
+
+  async grabStripTranslation() {
+    return this.resizeHandle.evaluate(
+      (handle) => getComputedStyle(handle, '::after').translate
+    )
+  }
+
+  async resizeByDragging(deltaY: number): Promise<void> {
+    const handleBox = await this.resizeHandle.boundingBox()
+    if (!handleBox) {
+      throw new Error('Bottom panel resize handle should have layout')
+    }
+
+    const handleCenterX = handleBox.x + handleBox.width / 2
+    const handleCenterY = handleBox.y + handleBox.height / 2
+
+    await this.page.mouse.move(handleCenterX, handleCenterY)
+    await this.page.mouse.down()
+    await this.page.mouse.move(handleCenterX, handleCenterY + deltaY, {
+      steps: 5
+    })
+    await this.page.mouse.up()
+  }
+}

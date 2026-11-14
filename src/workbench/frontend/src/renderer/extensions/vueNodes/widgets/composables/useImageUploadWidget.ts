@@ -1,0 +1,164 @@
+import { useNodeImage, useNodeVideo } from '@/composables/node/useNodeImage'
+import { useNodeImageUpload } from '@/composables/node/useNodeImageUpload'
+import { t } from '@/i18n'
+import type { LGraphNode } from '@/lib/litegraph/src/litegraph'
+import type { IComboWidget } from '@/lib/litegraph/src/types/widgets'
+import type { ResultItem } from '@/platform/remote/comfyui/execution/types'
+import type { ResultItemType } from '@/schemas/resultItemTypeSchema'
+import type { InputSpec } from '@/schemas/nodeDefSchema'
+import { useWorkflowStore } from '@/platform/workflow/management/stores/workflowStore'
+import { useToast } from '@/components/ui/toast/toastStore'
+import type { ComfyWidgetConstructor } from '@/types/comfy'
+import { useNodeOutputStore } from '@/stores/nodeOutputStore'
+import { isImageUploadInput } from '@/types/nodeDefAugmentation'
+import { createAnnotatedPath } from '@/utils/createAnnotatedPath'
+import { addToComboValues } from '@/utils/litegraphUtil'
+
+import {
+  ACCEPTED_IMAGE_TYPES,
+  ACCEPTED_VIDEO_TYPES,
+  isExtensionlessVideo,
+  isUploadableVideo
+} from '@/utils/mediaUploadUtil'
+
+function isImageFile(file: File) {
+  return file.type.startsWith('image/')
+}
+
+type ImageUploadComboWidget = Omit<IComboWidget, 'value' | 'callback'> & {
+  value: string | number | string[]
+  callback?: (value: string | number | string[]) => void
+}
+
+const findFileComboWidget = (
+  node: LGraphNode,
+  inputName: string
+): ImageUploadComboWidget | undefined =>
+  node.widgets?.find((w): w is ImageUploadComboWidget => w.name === inputName)
+
+export const useImageUploadWidget = () => {
+  const widgetConstructor: ComfyWidgetConstructor = (
+    node: LGraphNode,
+    inputName: string,
+    inputData: InputSpec
+  ) => {
+    if (!isImageUploadInput(inputData)) {
+      throw new Error(
+        'Image upload widget requires imageInputName augmentation'
+      )
+    }
+
+    const inputOptions = inputData[1]
+    const { imageInputName, allow_batch, image_folder = 'input' } = inputOptions
+    const folder: ResultItemType | undefined = image_folder
+    const nodeOutputStore = useNodeOutputStore()
+
+    const isAnimated = !!inputOptions.animated_image_upload
+    const isVideo = !!inputOptions.video_upload
+    const accept = isVideo ? ACCEPTED_VIDEO_TYPES : ACCEPTED_IMAGE_TYPES
+    const { showPreview } = isVideo ? useNodeVideo(node) : useNodeImage(node)
+
+    const fileFilter = isVideo ? isUploadableVideo : isImageFile
+    function alertExtensionlessVideo(files: File[]) {
+      if (!files.some(isExtensionlessVideo)) return false
+      useToast().warning(t('g.videoFilenameExtensionRequired'))
+      return true
+    }
+    const fileComboWidget = findFileComboWidget(node, imageInputName)
+    if (!fileComboWidget) {
+      throw new Error(`Widget "${imageInputName}" not found on node`)
+    }
+    function formatPath(value: string | ResultItem) {
+      return typeof value === 'string'
+        ? createAnnotatedPath(value, { rootFolder: image_folder })
+        : createAnnotatedPath(value)
+    }
+
+    // Setup file upload handling
+    let rollback: (() => void) | undefined
+    const { openFileSelection } = useNodeImageUpload(node, {
+      allow_batch,
+      fileFilter,
+      accept,
+      folder,
+      onReject: isVideo ? alertExtensionlessVideo : undefined,
+      onUploadStart: (files) => {
+        if (files.length > 0) {
+          const prev = fileComboWidget.value
+          fileComboWidget.value = files[0].name
+          rollback = () => {
+            fileComboWidget.value = prev
+          }
+        }
+      },
+      onUploadError: () => {
+        rollback?.()
+        rollback = undefined
+      },
+      onUploadComplete: (output) => {
+        rollback = undefined
+        const annotated = output.map(formatPath)
+        annotated.forEach((path) => {
+          addToComboValues(fileComboWidget, path)
+        })
+
+        const newValue = allow_batch ? annotated : annotated[0]
+        const oldValue = fileComboWidget.value
+
+        fileComboWidget.value = newValue
+        fileComboWidget.callback?.(newValue)
+        node.onWidgetChanged?.(
+          fileComboWidget.name,
+          newValue,
+          oldValue,
+          fileComboWidget
+        )
+        useWorkflowStore().activeWorkflow?.changeTracker.captureCanvasState()
+      }
+    })
+
+    // Create the button widget for selecting the files
+    const uploadWidget = node.addWidget(
+      'button',
+      inputName,
+      'image',
+      () => openFileSelection(),
+      {
+        serialize: false,
+        surfaces: { canvas: 'shown', vueNode: 'never', panel: 'never' }
+      }
+    )
+    uploadWidget.label = t('g.choose_file_to_upload')
+
+    // Add our own callback to the combo widget to render an image when it changes
+    fileComboWidget.callback = function () {
+      node.imgs = undefined
+      nodeOutputStore.setNodeOutputs(node, String(fileComboWidget.value), {
+        isAnimated
+      })
+      showPreview({ block: false })
+      node.graph?.setDirtyCanvas(true)
+    }
+
+    // On load if we have a value then render the image
+    // The value isn't set immediately so we need to wait a moment
+    // No change callbacks seem to be fired on initial setting of the value
+    requestAnimationFrame(() => {
+      const fileValue = fileComboWidget.value as
+        | string
+        | number
+        | null
+        | undefined
+      if (fileValue != null) {
+        nodeOutputStore.setNodeOutputs(node, String(fileValue), {
+          isAnimated
+        })
+      }
+      showPreview({ block: false })
+    })
+
+    return { widget: uploadWidget }
+  }
+
+  return widgetConstructor
+}

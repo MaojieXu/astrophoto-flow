@@ -1,0 +1,47 @@
+{
+  "retrieved": "2026-11-14",
+  "projects": [
+    {
+      "directory": "src/workbench/backend",
+      "repository": "https://github.com/comfyanonymous/ComfyUI",
+      "commit": "1a82e6d01f395b43275c77acd289af1eb7090bb9",
+      "committed": "2026-10-22",
+      "version": "0.42.0",
+      "excluded": [
+        ".git",
+        ".github"
+      ],
+      "modifications": [
+        "nodes.py: reduced to 11 image classes and a 28-module comfy_extras whitelist; model/video/audio/3D/training node classes removed",
+        "comfy_extras/: deleted 69 node modules and chainner_models/; kept 28 image/utility modules plus color_util.py and compositor_blend.py",
+        "comfy/: deleted 35 model/audio/video/3D runtime modules and 12 model directories (ldm, text_encoders, cldm, taesd, k_diffusion, image_encoders, etc.)",
+        "comfy_api/: removed video/audio/3D input helpers and UI types; Input keeps Image and Mask",
+        "server.py: removed /embeddings, /models, /view_metadata, /experiment/models* and /global_subgraphs; added PyAV-backed EXR preview decoding",
+        "model management: removed app/model_manager.py and app/subgraph_manager.py; folder_paths now registers only custom_nodes",
+        "execution/runtime: removed model patcher, latent preview and prefetch hooks; kept image execution and cache",
+        "dependencies: pyproject.toml declares the engine runtime, uv.lock pins CPU torch; removed torchvision, transformers, tokenizers, sentencepiece, spandrel, torchsde, filelock and blake3",
+        "tests: removed model/runtime node tests and rewrote the EXR preview integration test around the retained /view API"
+      ]
+    },
+    {
+      "directory": "src/workbench/frontend",
+      "repository": "https://github.com/Comfy-Org/ComfyUI_frontend",
+      "commit": "c875ee420aa027a359b2953361eb3b356b7bef00",
+      "committed": "2026-10-21",
+      "version": "1.57.1",
+      "excluded": [
+        ".git",
+        ".github"
+      ],
+      "modifications": [
+        "sidebar: removed Model Library and Assets tabs and their registration, telemetry, labels and keybindings",
+        "stores: removed modelStore, model drag helpers, assets output loading and global-blueprint loading; user subgraphs remain",
+        "workflow: replaced the diffusion default graph with a single EmptyImage and removed A1111 PNG import",
+        "templates: removed sidebar, menu, command, first-run, linear-mode and empty-workflow template entry points because bundled templates require deleted nodes",
+        "execution UI: restored output-history refresh after status and execution_success",
+        "api: removed getGlobalSubgraphs/getGlobalSubgraphData and model-library calls",
+        "tests: updated sidebar, graph-view, subgraph and module-boundary specs for the retained surface"
+      ]
+    }
+  ]
+}

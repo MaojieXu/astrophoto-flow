@@ -1,0 +1,1204 @@
+import { PREFIX, SEPARATOR } from '@/constants/groupNodeConstants'
+import { t } from '@/i18n'
+import type { ISlotType } from '@/lib/litegraph/src/interfaces'
+import type { ISerialisedNode } from '@/lib/litegraph/src/types/serialisation'
+import type {
+  LGraphNodeConstructor,
+  LGraphNode
+} from '@/lib/litegraph/src/litegraph'
+import { LiteGraph } from '@/lib/litegraph/src/litegraph'
+import { outputLinks } from '@/lib/litegraph/src/node/slotLinks'
+import { slotTypeKey } from '@/lib/litegraph/src/utils/type'
+import type { SerializedNodeId } from '@/types/nodeId'
+import { parseNodeId } from '@/types/nodeId'
+import type {
+  ComfyNode,
+  ComfyWorkflowJSON
+} from '@/platform/workflow/validation/schemas/workflowSchema'
+import type { MissingNodeType } from '@/platform/nodeReplacement/types'
+import type {
+  ComfyNodeDef,
+  ComfyOutputTypesSpec,
+  InputSpec
+} from '@/schemas/nodeDefSchema'
+import { useNodeDefStore } from '@/stores/nodeDefStore'
+import { useWidgetStore } from '@/stores/widgetStore'
+import type { ComfyExtension } from '@/types/comfy'
+import { deserialiseAndCreate } from '@/utils/vintageClipboard'
+
+import { app } from '../../scripts/app'
+import { mergeIfValid } from './widgetInputs'
+
+/**
+ * Marker symbol stamped on a synthesized group-node type's `nodeData` (via
+ * {@link markGroupNodeType}) so loaded group-node instances can be detected and
+ * migrated to subgraphs.
+ */
+const GROUP = Symbol()
+
+/**
+ * Stamp the group-node marker onto the registered node type so instances created
+ * during load can be detected by {@link GroupNodeHandler.isGroupNode}. This is
+ * stamped directly on the constructor rather than copied through
+ * {@link ComfyNodeDefImpl} construction, keeping the migration self-contained.
+ */
+function markGroupNodeType(typeName: string, config: GroupNodeConfig): void {
+  const ctor = LiteGraph.registered_node_types[typeName] as
+    | LGraphNodeConstructor
+    | undefined
+  if (ctor?.nodeData) ctor.nodeData[GROUP] = config
+}
+
+/**
+ * Link stored in a group node's workflow data. `sourceNodeIndex` is `null` when
+ * the source node was outside the group when it was created.
+ */
+export type GroupNodeLink = [
+  sourceNodeIndex: number | null,
+  sourceSlot: number,
+  targetNodeIndex: number,
+  targetSlot: number,
+  sourceNodeId: SerializedNodeId,
+  type?: unknown
+]
+type SlotLinks = Partial<Record<number, GroupNodeLink>>
+type LinksFromMap = Partial<
+  Record<number, Partial<Record<number, GroupNodeLink[]>>>
+>
+
+function isSlotType(value: unknown): value is ISlotType {
+  return (
+    typeof value === 'number' ||
+    typeof value === 'string' ||
+    (Array.isArray(value) && value.every((item) => typeof item === 'string'))
+  )
+}
+type LinksToMap = Partial<Record<number, SlotLinks>>
+type ExternalFromMap = Partial<
+  Record<number, Partial<Record<number, string | number>>>
+>
+
+interface GroupNodeConfigEntry {
+  input?: Record<string, { name?: string; visible?: boolean }>
+  output?: Record<number, { name?: string; visible?: boolean }>
+}
+
+interface GroupNodeData extends Partial<
+  Pick<
+    ISerialisedNode,
+    'type' | 'title' | 'inputs' | 'outputs' | 'widgets_values'
+  >
+> {
+  index?: number
+}
+
+export interface GroupNodeWorkflowData {
+  external?: (number | string)[][]
+  links: GroupNodeLink[]
+  nodes: GroupNodeData[]
+  config?: Record<number, GroupNodeConfigEntry>
+}
+
+function isOutputTypeSpec(
+  value: unknown
+): value is ComfyOutputTypesSpec[number] {
+  return (
+    typeof value === 'string' ||
+    (Array.isArray(value) &&
+      value.every(
+        (option) => typeof option === 'string' || typeof option === 'number'
+      ))
+  )
+}
+
+interface GroupNodeDef {
+  input: {
+    required: Record<string, unknown>
+    optional?: Record<string, unknown>
+  }
+  output: unknown[]
+  output_name: string[]
+  output_is_list: boolean[]
+}
+
+export class GroupNodeConfig {
+  name: string
+  nodeData: GroupNodeWorkflowData
+  inputCount: number
+  oldToNewOutputMap: Partial<Record<number, Record<number, number>>>
+  newToOldOutputMap: Partial<
+    Record<number, { node: GroupNodeData; slot: number }>
+  >
+  oldToNewInputMap: Partial<Record<number, Record<string, number>>>
+  oldToNewWidgetMap: Partial<Record<number, Record<string, string | null>>>
+  newToOldWidgetMap: Record<string, { node: GroupNodeData; inputName: string }>
+  primitiveDefs: Partial<Record<number, GroupNodeDef>>
+  widgetToPrimitive: Partial<Record<number, Record<string, number | number[]>>>
+  primitiveToWidget: Partial<
+    Record<number, { nodeId: number | string | null; inputName: string }[]>
+  >
+  nodeInputs: Partial<Record<number, Record<string, string>>>
+  outputVisibility: boolean[]
+  nodeDef: ComfyNodeDef | undefined
+  inputs!: unknown[]
+  linksFrom!: LinksFromMap
+  linksTo!: LinksToMap
+  externalFrom!: ExternalFromMap
+
+  constructor(name: string, nodeData: GroupNodeWorkflowData) {
+    this.name = name
+    this.nodeData = nodeData
+    this.getLinks()
+
+    this.inputCount = 0
+    this.oldToNewOutputMap = {}
+    this.newToOldOutputMap = {}
+    this.oldToNewInputMap = {}
+    this.oldToNewWidgetMap = {}
+    this.newToOldWidgetMap = {}
+    this.primitiveDefs = {}
+    this.widgetToPrimitive = {}
+    this.primitiveToWidget = {}
+    this.nodeInputs = {}
+    this.outputVisibility = []
+  }
+
+  async registerType(source = PREFIX) {
+    this.nodeDef = {
+      output: [],
+      output_name: [],
+      output_is_list: [],
+      output_node: false, // This is a lie (to satisfy the interface)
+      name: source + SEPARATOR + this.name,
+      display_name: this.name,
+      category: 'group nodes' + (SEPARATOR + source),
+      input: { required: {} },
+      description: `Group node combining ${this.nodeData.nodes
+        .map((n) => n.type)
+        .join(', ')}`,
+      python_module: 'custom_nodes.' + this.name
+    }
+
+    this.inputs = []
+    const seenInputs = {}
+    const seenOutputs = {}
+    for (let i = 0; i < this.nodeData.nodes.length; i++) {
+      const node = this.nodeData.nodes[i]
+      node.index = i
+      this.processNode(node, seenInputs, seenOutputs)
+    }
+
+    for (const p of this._convertedToProcess) {
+      p()
+    }
+    this._convertedToProcess = []
+    const typeName = `${PREFIX}${SEPARATOR}${this.name}`
+    await app.registerNodeDef(typeName, this.nodeDef)
+    markGroupNodeType(typeName, this)
+    useNodeDefStore().addNodeDef(this.nodeDef)
+  }
+
+  getLinks() {
+    this.linksFrom = {}
+    this.linksTo = {}
+    this.externalFrom = {}
+
+    // Extract links for easy lookup
+    for (const link of this.nodeData.links) {
+      const [sourceNodeIndex, sourceSlot, targetNodeIndex, targetSlot] = link
+
+      // Skip links outside the copy config
+      if (sourceNodeIndex == null) continue
+
+      const fromSlots = (this.linksFrom[sourceNodeIndex] ??= {})
+      ;(fromSlots[sourceSlot] ??= []).push(link)
+      ;(this.linksTo[targetNodeIndex] ??= {})[targetSlot] = link
+    }
+
+    for (const ext of this.nodeData.external ?? []) {
+      const nodeIdx = Number(ext[0])
+      const slotIdx = Number(ext[1])
+      const typeVal = ext.at(2)
+      if (typeVal == null) continue
+      ;(this.externalFrom[nodeIdx] ??= {})[slotIdx] = typeVal
+    }
+  }
+
+  processNode(
+    node: GroupNodeData,
+    seenInputs: Record<string, number>,
+    seenOutputs: Record<string, number>
+  ) {
+    const def = this.getNodeDef(node)
+    if (!def) return
+
+    const inputs = { ...def.input?.required, ...def.input?.optional }
+
+    this.inputs.push(this.processNodeInputs(node, seenInputs, inputs))
+    if (def.output?.length) this.processNodeOutputs(node, seenOutputs, def)
+  }
+
+  getNodeDef(
+    node: GroupNodeData
+  ): GroupNodeDef | ComfyNodeDef | null | undefined {
+    if (node.type) {
+      const def = globalDefs[node.type]
+      if (def) return def
+    }
+
+    const nodeIndex = node.index
+    if (nodeIndex == null) return undefined
+
+    const linksFrom = this.linksFrom[nodeIndex]
+    if (node.type === 'PrimitiveNode') {
+      // Skip as its not linked
+      if (!linksFrom) return
+
+      const firstLink = linksFrom[0]?.at(0)
+      const linkedType: unknown = firstLink?.at(5)
+      let type: string | number | null = firstLink
+        ? linkedType == null
+          ? null
+          : isSlotType(linkedType)
+            ? slotTypeKey(linkedType)
+            : null
+        : null
+      if (type === 'COMBO') {
+        // Use the array items
+        const output = node.outputs?.[0]
+        const source = output?.widget?.name
+        const nodeIdx = firstLink?.[2]
+        if (source && nodeIdx != null) {
+          const fromTypeName = this.nodeData.nodes.at(nodeIdx)?.type
+          if (fromTypeName) {
+            const fromType = globalDefs[fromTypeName]
+            const input =
+              fromType?.input?.required?.[source] ??
+              fromType?.input?.optional?.[source]
+            const inputType = input?.[0]
+            type =
+              typeof inputType === 'string' || typeof inputType === 'number'
+                ? inputType
+                : null
+          }
+        }
+      }
+
+      const def = (this.primitiveDefs[nodeIndex] = {
+        input: {
+          required: {
+            value: [type, {}]
+          }
+        },
+        output: [type],
+        output_name: [],
+        output_is_list: []
+      })
+      return def
+    } else if (node.type === 'Reroute') {
+      const linksTo = this.linksTo[nodeIndex]
+      if (linksTo && linksFrom && !this.externalFrom[nodeIndex]?.[0]) {
+        // Being used internally
+        return null
+      }
+
+      let config: Record<string, unknown> = {}
+      let rerouteType: ISlotType = '*'
+      if (linksFrom) {
+        const links = linksFrom[0] ?? []
+        for (const [, , targetNodeIndex, targetSlot] of links) {
+          const targetNode = this.nodeData.nodes.at(targetNodeIndex)
+          const input = targetNode?.inputs?.[targetSlot]
+          if (input?.type && rerouteType === '*') {
+            rerouteType = input.type
+          }
+          if (input?.widget && targetNode?.type) {
+            const targetDef = globalDefs[targetNode.type]
+            const targetWidget =
+              targetDef?.input?.required?.[input.widget.name] ??
+              targetDef?.input?.optional?.[input.widget.name]
+
+            if (targetWidget) {
+              const widgetSpec = [targetWidget[0], config] as Parameters<
+                typeof mergeIfValid
+              >[4]
+              const res = mergeIfValid(
+                { widget: widgetSpec } as unknown as Parameters<
+                  typeof mergeIfValid
+                >[0],
+                targetWidget,
+                false,
+                undefined,
+                widgetSpec
+              )
+              config = res.customConfig ?? config
+            }
+          }
+        }
+      } else if (linksTo) {
+        const link = linksTo[0]
+        if (link?.[0] != null) {
+          const output = this.nodeData.nodes.at(link[0])?.outputs?.[link[1]]
+          if (output) rerouteType = output.type
+        }
+      } else {
+        // Reroute used as a pipe
+        for (const l of this.nodeData.links) {
+          if (l[2] === node.index && isSlotType(l[5])) {
+            rerouteType = l[5]
+            break
+          }
+        }
+        if (rerouteType === '*') {
+          // Check for an external link
+          const t = this.externalFrom[nodeIndex]?.[0]
+          if (t) {
+            rerouteType = t
+          }
+        }
+      }
+
+      config.forceInput = true
+      const rerouteTypeKey = slotTypeKey(rerouteType)
+      return {
+        input: {
+          required: {
+            [rerouteTypeKey]: [rerouteTypeKey, config]
+          }
+        },
+        output: [rerouteTypeKey],
+        output_name: [],
+        output_is_list: []
+      }
+    }
+
+    console.warn(
+      'Skipping virtual node ' +
+        node.type +
+        ' when building group node ' +
+        this.name
+    )
+  }
+
+  getInputConfig(
+    node: GroupNodeData,
+    inputName: string,
+    seenInputs: Record<string, number>,
+    config: InputSpec,
+    extra?: Record<string, unknown>
+  ) {
+    const nodeConfig = this.nodeData.config?.[node.index ?? -1]
+    const customConfig = nodeConfig?.input?.[inputName]
+    let name =
+      customConfig?.name ??
+      node.inputs?.find((inp) => inp.name === inputName)?.label ??
+      inputName
+    let key = name
+    let prefix = ''
+    // Special handling for primitive to include the title if it is set rather than just "value"
+    if ((node.type === 'PrimitiveNode' && node.title) || name in seenInputs) {
+      prefix = `${node.title ?? node.type} `
+      key = name = `${prefix}${inputName}`
+      if (name in seenInputs) {
+        name = `${prefix}${seenInputs[name]} ${inputName}`
+      }
+    }
+    seenInputs[key] = (seenInputs[key] ?? 1) + 1
+
+    if (inputName === 'seed' || inputName === 'noise_seed') {
+      if (!extra) extra = {}
+      extra.control_after_generate = `${prefix}control_after_generate`
+    }
+    if (config[0] === 'IMAGEUPLOAD') {
+      if (!extra) extra = {}
+      const nodeIndex = node.index ?? -1
+      const configOptions = config[1] ?? {}
+      const widgetKey =
+        'widget' in configOptions && typeof configOptions.widget === 'string'
+          ? configOptions.widget
+          : 'image'
+      extra.widget = this.oldToNewWidgetMap[nodeIndex]?.[widgetKey] ?? 'image'
+    }
+
+    if (extra) {
+      config = [config[0], { ...config[1], ...extra }]
+    }
+
+    return { name, config, customConfig }
+  }
+
+  processWidgetInputs(
+    inputs: Record<string, unknown>,
+    node: GroupNodeData,
+    inputNames: string[],
+    seenInputs: Record<string, number>
+  ) {
+    const slots: string[] = []
+    const converted = new Map<number, string>()
+    const nodeIndex = node.index ?? -1
+    const widgetMap: Record<string, string | null> = (this.oldToNewWidgetMap[
+      nodeIndex
+    ] = {})
+    for (const inputName of inputNames) {
+      const inputSpec = inputs[inputName]
+      // The type is either a string (e.g. 'INT') or, for a combo widget, an
+      // array of options (e.g. [['euler', 'ddim']]) — both are valid V1
+      // input specs. Rejecting the array form here misclassified every combo
+      // widget as a plain input slot.
+      const isValidSpec =
+        Array.isArray(inputSpec) &&
+        inputSpec.length >= 1 &&
+        (typeof inputSpec[0] === 'string' || Array.isArray(inputSpec[0]))
+      // A `forceInput` spec is always a socket, even for a type (e.g. a
+      // combo) that would otherwise materialize as a widget — matches the
+      // rule `litegraphService.addInputSocket`/`addInputWidget` apply when
+      // actually building the node.
+      const specOptions =
+        Array.isArray(inputSpec) &&
+        typeof inputSpec[1] === 'object' &&
+        inputSpec[1] !== null
+          ? inputSpec[1]
+          : {}
+      const isForcedInput =
+        'forceInput' in specOptions && specOptions.forceInput === true
+      if (
+        isValidSpec &&
+        !isForcedInput &&
+        useWidgetStore().inputIsWidget(inputSpec as InputSpec)
+      ) {
+        const convertedIndex =
+          node.inputs?.findIndex(
+            (inp) => inp.name === inputName && inp.widget?.name === inputName
+          ) ?? -1
+        if (convertedIndex > -1) {
+          // This widget has been converted to a widget
+          // We need to store this in the correct position so link ids line up
+          converted.set(convertedIndex, inputName)
+          widgetMap[inputName] = null
+        } else {
+          // Normal widget
+          const { name, config } = this.getInputConfig(
+            node,
+            inputName,
+            seenInputs,
+            inputSpec as InputSpec
+          )
+          if (this.nodeDef?.input?.required) {
+            this.nodeDef.input.required[name] = config
+          }
+          widgetMap[inputName] = name
+          this.newToOldWidgetMap[name] = { node, inputName }
+        }
+      } else {
+        // Normal input
+        slots.push(inputName)
+      }
+    }
+    return { converted, slots }
+  }
+
+  checkPrimitiveConnection(
+    link: GroupNodeLink,
+    inputName: string,
+    inputs: Record<string, InputSpec>
+  ) {
+    const [sourceNodeIndex, , targetNodeIndex] = link
+    if (sourceNodeIndex == null) return
+    const sourceNode = this.nodeData.nodes.at(sourceNodeIndex)
+    if (sourceNode?.type === 'PrimitiveNode') {
+      // Merge link configurations
+      const primitiveDef = this.primitiveDefs[sourceNodeIndex]
+      if (!primitiveDef) return
+      const targetWidget = inputs[inputName]
+      const primitiveConfig = primitiveDef.input.required.value as [
+        unknown,
+        Record<string, unknown>
+      ]
+      const config = mergeIfValid(
+        {},
+        targetWidget,
+        false,
+        undefined,
+        primitiveConfig as InputSpec
+      )
+      const inputConfig = inputs[inputName]?.[1]
+      primitiveConfig[1] =
+        (config.customConfig ?? inputConfig)
+          ? { ...(typeof inputConfig === 'object' ? inputConfig : {}) }
+          : {}
+
+      const widgetName = this.oldToNewWidgetMap[sourceNodeIndex]?.['value']
+      if (widgetName) {
+        const name = widgetName.substring(0, widgetName.length - 6)
+        primitiveConfig[1].control_after_generate = true
+        primitiveConfig[1].control_prefix = name
+      }
+
+      const toPrimitive = (this.widgetToPrimitive[targetNodeIndex] ??= {})
+      const existing = toPrimitive[inputName]
+      if (Array.isArray(existing)) {
+        existing.push(sourceNodeIndex)
+      } else if (typeof existing === 'number') {
+        toPrimitive[inputName] = [existing, sourceNodeIndex]
+      } else {
+        toPrimitive[inputName] = sourceNodeIndex
+      }
+
+      ;(this.primitiveToWidget[sourceNodeIndex] ??= []).push({
+        nodeId: targetNodeIndex,
+        inputName
+      })
+    }
+  }
+
+  processInputSlots(
+    inputs: Record<string, InputSpec>,
+    node: GroupNodeData,
+    slots: string[],
+    linksTo: SlotLinks,
+    inputMap: Record<string, number>,
+    seenInputs: Record<string, number>
+  ) {
+    const nodeIdx = node.index ?? -1
+    const nodeInputs: Record<string, string> = (this.nodeInputs[nodeIdx] = {})
+    for (let i = 0; i < slots.length; i++) {
+      const inputName = slots[i]
+      // `linksTo` is keyed by this inner node's own original input-slot
+      // index, which rarely lines up with `i` (this input's position within
+      // the *filtered* `slots` list). Look the real slot index up by name so
+      // an internally-linked input isn't matched against a different slot's
+      // link (or missed/misread entirely) and either wrongly hidden or
+      // wrongly exposed on the group node. A synthesized def can key its
+      // input by type rather than by slot name (e.g. Reroute, whose actual
+      // slot name is always ''), so fall back to the old positional index
+      // when the name lookup misses.
+      const namedSlotIndex = node.inputs?.findIndex(
+        (inp) => inp.name === inputName
+      )
+      const slotIndex =
+        namedSlotIndex != null && namedSlotIndex >= 0 ? namedSlotIndex : i
+      const link = linksTo[slotIndex]
+      if (link) {
+        this.checkPrimitiveConnection(link, inputName, inputs)
+        // This input is linked so we can skip it
+        continue
+      }
+
+      const { name, config, customConfig } = this.getInputConfig(
+        node,
+        inputName,
+        seenInputs,
+        inputs[inputName]
+      )
+
+      nodeInputs[inputName] = name
+      if (customConfig?.visible === false) continue
+
+      if (this.nodeDef?.input?.required) {
+        this.nodeDef.input.required[name] = config
+      }
+      inputMap[inputName] = this.inputCount++
+    }
+  }
+
+  processConvertedWidgets(
+    inputs: Record<string, InputSpec>,
+    node: GroupNodeData,
+    converted: Map<number, string>,
+    linksTo: SlotLinks,
+    inputMap: Record<string, number>,
+    seenInputs: Record<string, number>
+  ) {
+    // Process converted widgets sorted into their index order (ordered as
+    // they were converted) so link ids match up. `converted`'s keys are
+    // this node's real serialized input-slot indices (set by the
+    // `findIndex` in processWidgetInputs), so use that key - not this
+    // widget's position among converted widgets - to look its link up in
+    // `linksTo`, which is also keyed by real slot index.
+    const convertedEntries = [...converted.entries()].sort(([a], [b]) => a - b)
+    for (const [slotIndex, inputName] of convertedEntries) {
+      if (!inputName) continue
+      const link = linksTo[slotIndex]
+      if (link) {
+        this.checkPrimitiveConnection(link, inputName, inputs)
+        // This input is linked so we can skip it
+        continue
+      }
+
+      const { name, config } = this.getInputConfig(
+        node,
+        inputName,
+        seenInputs,
+        inputs[inputName],
+        {
+          defaultInput: true
+        }
+      )
+
+      if (this.nodeDef?.input?.required) {
+        this.nodeDef.input.required[name] = config
+      }
+      this.newToOldWidgetMap[name] = { node, inputName }
+
+      const nodeIndex = node.index ?? -1
+      ;(this.oldToNewWidgetMap[nodeIndex] ??= {})[inputName] = name
+
+      inputMap[inputName] = this.inputCount++
+    }
+  }
+
+  private _convertedToProcess: (() => void)[] = []
+  processNodeInputs(
+    node: GroupNodeData,
+    seenInputs: Record<string, number>,
+    inputs: Record<string, unknown>
+  ) {
+    const inputMapping: unknown[] = []
+
+    const inputNames = Object.keys(inputs)
+    if (!inputNames.length) return
+
+    const { converted, slots } = this.processWidgetInputs(
+      inputs,
+      node,
+      inputNames,
+      seenInputs
+    )
+    const nodeIndex = node.index ?? -1
+    const linksTo = this.linksTo[nodeIndex] ?? {}
+    const inputMap: Record<string, number> = (this.oldToNewInputMap[nodeIndex] =
+      {})
+    this.processInputSlots(
+      inputs as Record<string, InputSpec>,
+      node,
+      slots,
+      linksTo,
+      inputMap,
+      seenInputs
+    )
+
+    // Converted inputs have to be processed after all other nodes as they'll be at the end of the list
+    this._convertedToProcess.push(() =>
+      this.processConvertedWidgets(
+        inputs as Record<string, InputSpec>,
+        node,
+        converted,
+        linksTo,
+        inputMap,
+        seenInputs
+      )
+    )
+
+    return inputMapping
+  }
+
+  processNodeOutputs(
+    node: GroupNodeData,
+    seenOutputs: Record<string, number>,
+    def: GroupNodeDef | ComfyNodeDef
+  ) {
+    const nodeIndex = node.index ?? -1
+    const oldToNew: Record<number, number> = (this.oldToNewOutputMap[
+      nodeIndex
+    ] = {})
+
+    const defOutput = def.output ?? []
+    // Add outputs
+    for (let outputId = 0; outputId < defOutput.length; outputId++) {
+      const linksFrom = this.linksFrom[nodeIndex]
+      // If this output is linked internally we flag it to hide
+      const hasLink =
+        linksFrom?.[outputId] && !this.externalFrom[nodeIndex]?.[outputId]
+      const outputConfig = this.nodeData.config?.[node.index ?? -1]
+      const customConfig = outputConfig?.output?.[outputId]
+      const visible = customConfig?.visible ?? !hasLink
+      this.outputVisibility.push(visible)
+      if (!visible) {
+        continue
+      }
+
+      const output = defOutput[outputId]
+      if (!isOutputTypeSpec(output)) continue
+
+      if (this.nodeDef?.output) {
+        oldToNew[outputId] = this.nodeDef.output.length
+        this.newToOldOutputMap[this.nodeDef.output.length] = {
+          node,
+          slot: outputId
+        }
+        this.nodeDef.output.push(output)
+        this.nodeDef.output_is_list?.push(
+          def.output_is_list?.[outputId] ?? false
+        )
+      }
+
+      let label: string | undefined = customConfig?.name
+      if (!label) {
+        const outputVal = defOutput[outputId]
+        label =
+          def.output_name?.[outputId] ??
+          (typeof outputVal === 'string' ? outputVal : undefined)
+        const output = node.outputs?.find((o) => o.name === label)
+        if (output?.label) {
+          label = output.label
+        }
+      }
+
+      let name = label ?? `output_${outputId}`
+      if (name in seenOutputs) {
+        const prefix = `${node.title ?? node.type} `
+        name = `${prefix}${label ?? outputId}`
+        if (name in seenOutputs) {
+          name = `${prefix}${node.index} ${label ?? outputId}`
+        }
+      }
+      seenOutputs[name] = 1
+
+      this.nodeDef?.output_name?.push(name)
+    }
+  }
+
+  static async registerFromWorkflow(
+    groupNodes: Record<string, GroupNodeWorkflowData>,
+    missingNodeTypes: (
+      | string
+      | {
+          type: string
+          nodeId?: string | number
+          hint?: string
+          action?: unknown
+        }
+    )[],
+    instanceIdsByGroup?: Map<string, (string | number)[]>
+  ) {
+    for (const g in groupNodes) {
+      const groupData = groupNodes[g]
+
+      const missingInnerTypes = [
+        ...new Set(
+          groupData.nodes
+            .filter(
+              (n) => !n.type || !(n.type in LiteGraph.registered_node_types)
+            )
+            .map((n) => n.type ?? 'unknown')
+        )
+      ]
+
+      if (missingInnerTypes.length) {
+        const groupType = `${PREFIX}${SEPARATOR}${g}`
+        const registeredGroupType = LiteGraph.registered_node_types[
+          groupType
+        ] as LGraphNodeConstructor | undefined
+        if (registeredGroupType?.nodeData?.[GROUP]) {
+          LiteGraph.unregisterNodeType(groupType)
+          useNodeDefStore().removeNodeDef(groupType)
+        }
+        const removeAction = {
+          text: 'Remove from workflow',
+          callback: (e?: MouseEvent) => {
+            delete groupNodes[g]
+            const target = e?.target as HTMLElement | undefined
+            if (!target) return
+            target.textContent = 'Removed'
+            target.style.pointerEvents = 'none'
+            target.style.opacity = '0.7'
+          }
+        }
+        if (instanceIdsByGroup) {
+          // One report per canvas instance so every entry is backed by a
+          // real node and can be retired when that node goes away. A group
+          // definition with no instances gets no report: there is no node
+          // to locate, and nothing that could ever retire the row.
+          for (const id of instanceIdsByGroup.get(g) ?? []) {
+            missingNodeTypes.push({
+              type: groupType,
+              nodeId: String(id),
+              hint: t('g.missingNodeTypesInGroup', {
+                types: missingInnerTypes.join(', ')
+              }),
+              action: removeAction
+            })
+          }
+        } else {
+          for (const missingType of missingInnerTypes) {
+            missingNodeTypes.push({
+              type: missingType,
+              hint: ` (In group node '${groupType}')`
+            })
+          }
+          missingNodeTypes.push({ type: groupType, action: removeAction })
+        }
+        continue
+      }
+
+      const config = new GroupNodeConfig(g, groupData)
+      await config.registerType()
+    }
+  }
+}
+
+/**
+ * Finds the outer widget matching `name`, skipping any index already in
+ * `consumed`.
+ *
+ * Widget names inside a synthesized group-node type are meant to be unique
+ * (see {@link GroupNodeConfig.getInputConfig}'s de-duplication), so pairing
+ * by name alone is normally safe. But it is not *guaranteed* unique across
+ * every inner node/widget combination, and a plain `Array.findIndex` always
+ * resolves a shared name to the *first* matching widget — silently copying
+ * that node's value into every other inner node exposing a widget with the
+ * same final name. Consuming each match exactly once, in the same
+ * node-by-node order the inner nodes are unpacked, keeps every widget paired
+ * with the widget belonging to its own originating node even when two
+ * inner nodes end up sharing an outer widget name (e.g. two `CLIPTextEncode`
+ * nodes both exposing `text`).
+ */
+export function findUnconsumedWidgetIndex(
+  widgets: { name?: string }[] | undefined,
+  name: string,
+  consumed: Set<number>
+): number {
+  if (!widgets) return -1
+  for (let i = 0; i < widgets.length; i++) {
+    if (consumed.has(i)) continue
+    if (widgets[i]?.name === name) return i
+  }
+  return -1
+}
+
+/**
+ * Migration-only adapter for deprecated group nodes.
+ *
+ * Group nodes are no longer a supported feature. When a legacy workflow that
+ * contains group nodes is loaded, {@link GroupNodeConfig.registerFromWorkflow}
+ * synthesizes temporary node types so the instances can be created during
+ * `configure`. The load-time migration unpacks each instance via
+ * {@link convertToNodes} and {@link LGraph.convertToSubgraph} repackages the
+ * result as a subgraph.
+ *
+ */
+export class GroupNodeHandler {
+  node: LGraphNode
+  groupData: GroupNodeConfig
+
+  constructor(node: LGraphNode, groupData: GroupNodeConfig) {
+    this.node = node
+    this.groupData = groupData
+  }
+
+  /**
+   * Unpacks this group node into its constituent nodes within the root graph,
+   * copying current widget values and reconnecting external links, then removes
+   * the group node. Returns the newly created nodes.
+   *
+   * Lossiness is accepted: group nodes nested inside subgraphs are unpacked into
+   * the root graph rather than their original container.
+   */
+  convertToNodes(): LGraphNode[] {
+    const node = this.node
+    const { nodeData, oldToNewWidgetMap, oldToNewInputMap, newToOldOutputMap } =
+      this.groupData
+
+    const addInnerNodes = () => {
+      // Clone the node data so we don't mutate it for other instances
+      const c = { ...nodeData }
+      c.nodes = c.nodes.map((n) => ({ ...n, id: undefined }))
+      deserialiseAndCreate(JSON.stringify(c), app.canvas)
+
+      const [x, y] = node.pos
+      let top: number | undefined
+      let left: number | undefined
+      // deserialiseAndCreate selects the created nodes in creation order, which
+      // matches nodeData.nodes order.
+      const selectedIds = Object.keys(app.canvas.selected_nodes)
+      const newNodes: LGraphNode[] = []
+      // Shared across every inner node processed below, in nodeData.nodes
+      // order, so a widget already paired to one inner node's value can
+      // never be matched again for another (see findUnconsumedWidgetIndex).
+      const consumedOuterWidgetIndices = new Set<number>()
+      for (let i = 0; i < selectedIds.length; i++) {
+        const selectedId = parseNodeId(selectedIds[i])
+        const newNode = selectedId
+          ? app.rootGraph.getNodeById(selectedId)
+          : null
+        const innerNodeData = nodeData.nodes.at(i)
+        if (!newNode) continue
+        newNodes.push(newNode)
+
+        if (left == null || newNode.pos[0] < left) left = newNode.pos[0]
+        if (top == null || newNode.pos[1] < top) top = newNode.pos[1]
+
+        if (!newNode.widgets || !innerNodeData) continue
+
+        const map = oldToNewWidgetMap[i]
+        if (!map) continue
+        for (const oldName of Object.keys(map)) {
+          const newName = map[oldName]
+          if (!newName) continue
+
+          const widgetIndex = findUnconsumedWidgetIndex(
+            node.widgets,
+            newName,
+            consumedOuterWidgetIndices
+          )
+          if (widgetIndex === -1) continue
+
+          // An index is only marked consumed once its value is actually
+          // copied, so a bail below (a missing inner widget, or fewer outer
+          // widgets than this PrimitiveNode has) can't permanently burn an
+          // index another inner node legitimately needs.
+          if (innerNodeData.type === 'PrimitiveNode') {
+            for (let j = 0; j < newNode.widgets.length; j++) {
+              const srcWidget = node.widgets?.[widgetIndex + j]
+              if (!srcWidget) continue
+              consumedOuterWidgetIndices.add(widgetIndex + j)
+              newNode.widgets[j].value = srcWidget.value
+            }
+          } else {
+            const outerWidget = node.widgets?.[widgetIndex]
+            const newWidget = newNode.widgets.find((w) => w.name === oldName)
+            if (!newWidget || !outerWidget) continue
+
+            consumedOuterWidgetIndices.add(widgetIndex)
+            newWidget.value = outerWidget.value
+            const linkedWidgets = outerWidget.linkedWidgets ?? []
+            for (let w = 0; w < linkedWidgets.length; w++) {
+              const newLinked = newWidget.linkedWidgets?.[w]
+              if (newLinked && linkedWidgets[w]) {
+                newLinked.value = linkedWidgets[w].value
+              }
+            }
+          }
+        }
+      }
+
+      // Shift each node so the unpacked group appears at the group node position
+      for (const newNode of newNodes) {
+        newNode.pos = [
+          newNode.pos[0] - ((left ?? 0) - x),
+          newNode.pos[1] - ((top ?? 0) - y)
+        ]
+      }
+
+      return { newNodes, selectedIds }
+    }
+
+    const reconnectInputs = (selectedIds: (string | number)[]) => {
+      for (const [innerNodeIndex, map] of Object.entries(oldToNewInputMap)) {
+        const selectedId = parseNodeId(selectedIds[Number(innerNodeIndex)])
+        const newNode = selectedId
+          ? app.rootGraph.getNodeById(selectedId)
+          : null
+        if (!newNode || !map) continue
+        for (const [innerInputName, groupSlotId] of Object.entries(map)) {
+          const link = node.getInputLink(groupSlotId)
+          if (!link) continue
+          const originNode = app.rootGraph.getNodeById(link.origin_id)
+          const innerInputId = newNode.findInputSlot(innerInputName)
+          if (innerInputId !== -1) {
+            originNode?.connect(link.origin_slot, newNode, innerInputId)
+          }
+        }
+      }
+    }
+
+    const reconnectOutputs = (selectedIds: (string | number)[]) => {
+      for (
+        let groupOutputId = 0;
+        groupOutputId < node.outputs.length;
+        groupOutputId++
+      ) {
+        const links = outputLinks(app.rootGraph, node.id, groupOutputId)
+        for (const link of links) {
+          const slot = newToOldOutputMap[groupOutputId]
+          if (!slot) continue
+          const targetNode = app.rootGraph.getNodeById(link.target_id)
+          const selectedId = parseNodeId(selectedIds[slot.node.index ?? 0])
+          const newNode = selectedId
+            ? app.rootGraph.getNodeById(selectedId)
+            : null
+          if (targetNode) {
+            newNode?.connect(slot.slot, targetNode, link.target_slot)
+          }
+        }
+      }
+    }
+
+    app.canvas.emitBeforeChange()
+    try {
+      const { newNodes, selectedIds } = addInnerNodes()
+      reconnectInputs(selectedIds)
+      reconnectOutputs(selectedIds)
+      app.rootGraph.remove(this.node)
+      return newNodes
+    } finally {
+      app.canvas.emitAfterChange()
+    }
+  }
+
+  static getHandler(node: LGraphNode): GroupNodeHandler | undefined {
+    const cached = (node as LGraphNode & { [GROUP]?: GroupNodeHandler })[GROUP]
+    if (cached) return cached
+    const groupData = groupConfigOf(node)
+    if (!groupData) return undefined
+    const handler = new GroupNodeHandler(node, groupData)
+    ;(node as LGraphNode & { [GROUP]: GroupNodeHandler })[GROUP] = handler
+    return handler
+  }
+
+  static isGroupNode(node: LGraphNode) {
+    return groupConfigOf(node) !== undefined
+  }
+}
+
+function groupConfigOf(node: LGraphNode): GroupNodeConfig | undefined {
+  const config = node.constructor.nodeData?.[GROUP]
+  return config instanceof GroupNodeConfig ? config : undefined
+}
+
+export const replaceLegacySeparators = (nodes: ComfyNode[]): void => {
+  for (const node of nodes) {
+    if (typeof node.type === 'string' && node.type.startsWith('workflow/')) {
+      node.type = node.type.replace(/^workflow\//, `${PREFIX}${SEPARATOR}`)
+    }
+  }
+}
+
+/**
+ * Converts every group node in the root graph to a subgraph. Re-scans until none
+ * remain so group nodes revealed by a previous conversion are also migrated. A
+ * failed conversion removes the offending node so loading can continue (accepted
+ * lossiness) and the scan cannot loop forever.
+ * @returns the number of group nodes converted
+ */
+function convertLoadedGroupNodes(): number {
+  let converted = 0
+  const failed = new Set<LGraphNode>()
+  for (;;) {
+    const node = app.rootGraph.nodes.find(
+      (n) => GroupNodeHandler.isGroupNode(n) && !failed.has(n)
+    )
+    if (!node) return converted
+    try {
+      const handler = GroupNodeHandler.getHandler(node)
+      if (!handler) {
+        console.error('Missing handler for group node')
+        failed.add(node)
+        app.rootGraph.remove(node)
+        continue
+      }
+      const innerNodes = handler.convertToNodes()
+      for (const inner of innerNodes) inner.updateArea()
+      app.rootGraph.convertToSubgraph(new Set(innerNodes))
+      converted++
+    } catch (error) {
+      console.error('Failed to convert group node to subgraph', error)
+      failed.add(node)
+      try {
+        app.rootGraph.remove(node)
+      } catch (removeError) {
+        console.error(
+          'Failed to remove group node after conversion failure',
+          removeError
+        )
+      }
+    }
+  }
+}
+
+const groupNodeReportIndices = new WeakMap<
+  Exclude<MissingNodeType, string>,
+  number
+>()
+
+const id = 'Comfy.GroupNode'
+
+/**
+ * Global node definitions cache. Populated by `addCustomNodeDefs` during
+ * extension initialization and read by {@link GroupNodeConfig.getNodeDef} when
+ * synthesizing temporary group-node definitions during load.
+ */
+let globalDefs: Partial<Record<string, ComfyNodeDef>> = {}
+const ext: ComfyExtension = {
+  name: id,
+  addCustomNodeDefs(defs: Record<string, ComfyNodeDef>) {
+    globalDefs = defs
+  },
+  async beforeConfigureGraph(
+    graphData: ComfyWorkflowJSON,
+    missingNodeTypes: MissingNodeType[]
+  ) {
+    const nodes = graphData.extra?.groupNodes as
+      | Record<string, GroupNodeWorkflowData>
+      | undefined
+    if (nodes) {
+      replaceLegacySeparators(graphData.nodes)
+      const instanceIndicesByGroup = new Map<string, number[]>()
+      const groupTypePrefix = `${PREFIX}${SEPARATOR}`
+      for (const [nodeIndex, n] of graphData.nodes.entries()) {
+        if (!n.type.startsWith(groupTypePrefix)) continue
+        const groupName = n.type.slice(groupTypePrefix.length)
+        const indices = instanceIndicesByGroup.get(groupName) ?? []
+        indices.push(nodeIndex)
+        instanceIndicesByGroup.set(groupName, indices)
+      }
+      const groupNodeReports: MissingNodeType[] = []
+      await GroupNodeConfig.registerFromWorkflow(
+        nodes,
+        groupNodeReports,
+        instanceIndicesByGroup
+      )
+      for (const report of groupNodeReports) {
+        if (typeof report === 'string' || report.nodeId == null) continue
+        const nodeIndex = Number(report.nodeId)
+        if (Number.isInteger(nodeIndex)) {
+          groupNodeReportIndices.set(report, nodeIndex)
+        }
+      }
+      missingNodeTypes.push(...groupNodeReports)
+    }
+  },
+  afterConfigureGraph(missingNodeTypes) {
+    for (let index = missingNodeTypes.length - 1; index >= 0; index--) {
+      const report = missingNodeTypes[index]
+      if (typeof report === 'string') continue
+      const nodeIndex = groupNodeReportIndices.get(report)
+      if (nodeIndex === undefined) continue
+      groupNodeReportIndices.delete(report)
+      const node = app.rootGraph.nodes.at(nodeIndex)
+      if (node) {
+        report.nodeId = String(node.id)
+      } else {
+        missingNodeTypes.splice(index, 1)
+      }
+    }
+    if (convertLoadedGroupNodes() > 0) {
+      delete app.rootGraph.extra.groupNodes
+    }
+  },
+  nodeCreated(node: LGraphNode) {
+    if (!GroupNodeHandler.isGroupNode(node)) return
+    const handler = GroupNodeHandler.getHandler(node)
+    // A stray group node created after load (e.g. paste) has no migration pass;
+    // convert it to a subgraph once it has joined a graph.
+    if (!app.configuringGraph) {
+      queueMicrotask(() => {
+        const graph = node.graph
+        if (graph && handler && GroupNodeHandler.isGroupNode(node)) {
+          try {
+            const innerNodes = handler.convertToNodes()
+            for (const inner of innerNodes) inner.updateArea()
+            graph.convertToSubgraph(new Set(innerNodes))
+          } catch (error) {
+            console.error(
+              'Failed to convert stray group node to subgraph',
+              error
+            )
+          }
+        }
+      })
+    }
+  }
+}
+
+app.registerExtension(ext)

@@ -1,0 +1,423 @@
+import { useColorPaletteStore } from '@/stores/workspace/colorPaletteStore'
+import { beforeEach, describe, expect, it, test, vi } from 'vitest'
+
+import type { LGraph } from '@/lib/litegraph/src/litegraph'
+import { LGraphEventMode } from '@/lib/litegraph/src/litegraph'
+import {
+  MINIMAP_DECORATION_POP_MS,
+  renderMinimapToCanvas
+} from '@/renderer/extensions/minimap/minimapCanvasRenderer'
+import type { MinimapRenderContext } from '@/renderer/extensions/minimap/types'
+import { useLinkStore } from '@/stores/linkStore'
+import { adjustColor } from '@/utils/colorUtil'
+import {
+  createMockLGraph,
+  createMockLGraphNode,
+  createMockNodeOutputSlot
+} from '@/utils/__tests__/litegraphTestUtils'
+import { toOwningGraphId, toRootGraphId } from '@/types/graphScopeId'
+import { toLinkId } from '@/types/linkId'
+import { toNodeId } from '@/types/nodeId'
+import type { UUID } from '@/utils/uuid'
+
+vi.mock(import('@/utils/colorUtil'), () => ({
+  adjustColor: vi.fn((color: string) => color + '_adjusted')
+}))
+
+const GRAPH_ID: UUID = 'renderer-graph'
+const GRAPH_SCOPE = {
+  rootGraphId: toRootGraphId(GRAPH_ID),
+  owningGraphId: toOwningGraphId(GRAPH_ID)
+}
+
+describe('minimapCanvasRenderer', () => {
+  let mockCanvas: HTMLCanvasElement
+  let mockContext: CanvasRenderingContext2D
+  let mockGraph: LGraph
+
+  beforeEach(() => {
+    mockContext = {
+      clearRect: vi.fn(),
+      fillRect: vi.fn(),
+      strokeRect: vi.fn(),
+      beginPath: vi.fn(),
+      moveTo: vi.fn(),
+      lineTo: vi.fn(),
+      stroke: vi.fn(),
+      arc: vi.fn(),
+      fill: vi.fn(),
+      fillStyle: '',
+      strokeStyle: '',
+      lineWidth: 1,
+      save: vi.fn(),
+      restore: vi.fn()
+    } as Partial<CanvasRenderingContext2D> as CanvasRenderingContext2D
+
+    mockCanvas = {
+      getContext: vi.fn().mockReturnValue(mockContext)
+    } as Partial<HTMLCanvasElement> as HTMLCanvasElement
+
+    mockGraph = createMockLGraph({
+      _nodes: [
+        createMockLGraphNode({
+          id: '1',
+          pos: [100, 100],
+          size: [150, 80],
+          bgcolor: '#FF0000',
+          mode: LGraphEventMode.ALWAYS,
+          has_errors: false,
+          outputs: []
+        }),
+        createMockLGraphNode({
+          id: '2',
+          pos: [300, 200],
+          size: [120, 60],
+          bgcolor: '#00FF00',
+          mode: LGraphEventMode.BYPASS,
+          has_errors: true,
+          outputs: []
+        })
+      ],
+      _groups: [],
+      id: GRAPH_ID,
+      rootGraph: { id: GRAPH_ID } as LGraph,
+      getNodeById: vi.fn()
+    })
+
+    Object.assign(useColorPaletteStore(), {
+      completedActivePalette: {
+        id: 'test',
+        name: 'Test Palette',
+        colors: {
+          litegraph_base: { NODE_SELECTED_TITLE_COLOR: '#fff' }
+        },
+        light_theme: false
+      }
+    })
+  })
+
+  it('should clear canvas and render nodes', () => {
+    const context: MinimapRenderContext = {
+      bounds: { minX: 0, minY: 0, width: 500, height: 400 },
+      scale: 0.5,
+      settings: {
+        nodeColors: true,
+        showLinks: false,
+        showGroups: false,
+        renderBypass: true,
+        renderError: true
+      },
+      width: 250,
+      height: 200
+    }
+
+    renderMinimapToCanvas(mockCanvas, mockGraph, context)
+
+    // Should clear the canvas first
+    expect(mockContext.clearRect).toHaveBeenCalledWith(0, 0, 250, 200)
+
+    // Should render nodes (batch by color)
+    expect(mockContext.fillRect).toHaveBeenCalled()
+  })
+
+  it('should handle empty graph', () => {
+    mockGraph._nodes = []
+
+    const context: MinimapRenderContext = {
+      bounds: { minX: 0, minY: 0, width: 500, height: 400 },
+      scale: 0.5,
+      settings: {
+        nodeColors: true,
+        showLinks: false,
+        showGroups: false,
+        renderBypass: false,
+        renderError: false
+      },
+      width: 250,
+      height: 200
+    }
+
+    renderMinimapToCanvas(mockCanvas, mockGraph, context)
+
+    expect(mockContext.clearRect).toHaveBeenCalledWith(0, 0, 250, 200)
+    expect(mockContext.fillRect).not.toHaveBeenCalled()
+  })
+
+  it('should batch render nodes by color', () => {
+    const context: MinimapRenderContext = {
+      bounds: { minX: 0, minY: 0, width: 500, height: 400 },
+      scale: 0.5,
+      settings: {
+        nodeColors: true,
+        showLinks: false,
+        showGroups: false,
+        renderBypass: false,
+        renderError: false
+      },
+      width: 250,
+      height: 200
+    }
+
+    renderMinimapToCanvas(mockCanvas, mockGraph, context)
+
+    // Should set fill style for each color group
+    const fillStyleCalls = []
+    let currentStyle = ''
+
+    mockContext.fillStyle = ''
+    Object.defineProperty(mockContext, 'fillStyle', {
+      get: () => currentStyle,
+      set: (value) => {
+        currentStyle = value
+        fillStyleCalls.push(value)
+      }
+    })
+
+    renderMinimapToCanvas(mockCanvas, mockGraph, context)
+
+    // Different colors for different nodes
+    expect(fillStyleCalls.length).toBeGreaterThan(0)
+  })
+
+  it('should render bypass nodes with special color', () => {
+    const context: MinimapRenderContext = {
+      bounds: { minX: 0, minY: 0, width: 500, height: 400 },
+      scale: 0.5,
+      settings: {
+        nodeColors: true,
+        showLinks: false,
+        showGroups: false,
+        renderBypass: true,
+        renderError: false
+      },
+      width: 250,
+      height: 200
+    }
+
+    renderMinimapToCanvas(mockCanvas, mockGraph, context)
+
+    // Node 2 is in bypass mode, should be rendered
+    expect(mockContext.fillRect).toHaveBeenCalled()
+  })
+
+  it('should render error outlines when enabled', () => {
+    const context: MinimapRenderContext = {
+      bounds: { minX: 0, minY: 0, width: 500, height: 400 },
+      scale: 0.5,
+      settings: {
+        nodeColors: true,
+        showLinks: false,
+        showGroups: false,
+        renderBypass: false,
+        renderError: true
+      },
+      width: 250,
+      height: 200
+    }
+
+    renderMinimapToCanvas(mockCanvas, mockGraph, context)
+
+    // Should set stroke style for errors
+    expect(mockContext.strokeStyle).toBe('#FF0000')
+    expect(mockContext.strokeRect).toHaveBeenCalled()
+  })
+
+  it('should render groups when enabled', () => {
+    mockGraph._groups = [
+      {
+        pos: [50, 50],
+        size: [400, 300],
+        color: '#0000FF'
+      }
+    ] as Partial<
+      (typeof mockGraph._groups)[number]
+    >[] as typeof mockGraph._groups
+
+    const context: MinimapRenderContext = {
+      bounds: { minX: 0, minY: 0, width: 500, height: 400 },
+      scale: 0.5,
+      settings: {
+        nodeColors: true,
+        showLinks: false,
+        showGroups: true,
+        renderBypass: false,
+        renderError: false
+      },
+      width: 250,
+      height: 200
+    }
+
+    renderMinimapToCanvas(mockCanvas, mockGraph, context)
+
+    // Groups should be rendered before nodes
+    expect(mockContext.fillRect).toHaveBeenCalled()
+  })
+
+  it('should render connections when enabled', () => {
+    mockGraph._nodes[0].outputs = [
+      createMockNodeOutputSlot({
+        name: 'output',
+        type: 'number',
+        boundingRect: new Float64Array([0, 0, 10, 10])
+      })
+    ]
+
+    useLinkStore().registerLink(GRAPH_SCOPE, {
+      id: toLinkId(1),
+      graphId: GRAPH_SCOPE.owningGraphId,
+      originNodeId: mockGraph._nodes[0].id,
+      originSlot: 0,
+      targetNodeId: toNodeId('2'),
+      targetSlot: 0,
+      type: 'number'
+    })
+
+    const context: MinimapRenderContext = {
+      bounds: { minX: 0, minY: 0, width: 500, height: 400 },
+      scale: 0.5,
+      settings: {
+        nodeColors: false,
+        showLinks: true,
+        showGroups: false,
+        renderBypass: false,
+        renderError: false
+      },
+      width: 250,
+      height: 200
+    }
+
+    renderMinimapToCanvas(mockCanvas, mockGraph, context)
+
+    // Should draw connection lines
+    expect(mockContext.beginPath).toHaveBeenCalled()
+    expect(mockContext.moveTo).toHaveBeenCalled()
+    expect(mockContext.lineTo).toHaveBeenCalled()
+    expect(mockContext.stroke).toHaveBeenCalled()
+
+    // Should draw connection slots
+    expect(mockContext.arc).toHaveBeenCalled()
+    expect(mockContext.fill).toHaveBeenCalled()
+  })
+
+  it('should handle light theme colors', () => {
+    Object.assign(useColorPaletteStore(), {
+      completedActivePalette: {
+        id: 'test',
+        name: 'Test Palette',
+        colors: {
+          litegraph_base: { NODE_SELECTED_TITLE_COLOR: '#000' }
+        },
+        light_theme: true
+      }
+    })
+
+    const context: MinimapRenderContext = {
+      bounds: { minX: 0, minY: 0, width: 500, height: 400 },
+      scale: 0.5,
+      settings: {
+        nodeColors: true,
+        showLinks: false,
+        showGroups: false,
+        renderBypass: false,
+        renderError: false
+      },
+      width: 250,
+      height: 200
+    }
+
+    renderMinimapToCanvas(mockCanvas, mockGraph, context)
+
+    // Color adjustment should be called for light theme
+    expect(adjustColor).toHaveBeenCalled()
+  })
+
+  it('should calculate correct offsets for centering', () => {
+    const context: MinimapRenderContext = {
+      bounds: { minX: 0, minY: 0, width: 200, height: 100 },
+      scale: 0.5,
+      settings: {
+        nodeColors: false,
+        showLinks: false,
+        showGroups: false,
+        renderBypass: false,
+        renderError: false
+      },
+      width: 250,
+      height: 200
+    }
+
+    renderMinimapToCanvas(mockCanvas, mockGraph, context)
+
+    // With bounds 200x100 at scale 0.5 = 100x50
+    // Canvas is 250x200, so offset should be (250-100)/2 = 75, (200-50)/2 = 75
+    // This affects node positioning
+    expect(mockContext.fillRect).toHaveBeenCalled()
+  })
+
+  it('renders a scoped semantic decoration after the base node fill', () => {
+    renderMinimapToCanvas(mockCanvas, mockGraph, {
+      bounds: { minX: 0, minY: 0, width: 500, height: 400 },
+      scale: 0.5,
+      settings: {
+        nodeColors: false,
+        showLinks: false,
+        showGroups: false,
+        renderBypass: false,
+        renderError: true
+      },
+      width: 250,
+      height: 200,
+      decorations: [
+        {
+          target: { ...GRAPH_SCOPE, nodeId: toNodeId('1') },
+          enter: 'pop',
+          enteredAt: 1_000
+        }
+      ],
+      now: 2_000
+    })
+
+    expect(mockContext.fillRect).toHaveBeenCalledTimes(3)
+    expect(mockContext.fillRect).toHaveBeenLastCalledWith(50, 50, 75, 40)
+    expect(mockContext.strokeRect).toHaveBeenCalledAfter(
+      vi.mocked(mockContext.fillRect)
+    )
+  })
+
+  test.for([0, MINIMAP_DECORATION_POP_MS / 2, MINIMAP_DECORATION_POP_MS])(
+    'keeps tiny pop markers centered and legible at %dms',
+    (elapsed) => {
+      renderMinimapToCanvas(mockCanvas, mockGraph, {
+        bounds: { minX: 0, minY: 0, width: 50_000, height: 40_000 },
+        scale: 0.005,
+        settings: {
+          nodeColors: false,
+          showLinks: false,
+          showGroups: false,
+          renderBypass: false,
+          renderError: true
+        },
+        width: 250,
+        height: 200,
+        decorations: [
+          {
+            target: { ...GRAPH_SCOPE, nodeId: toNodeId('1') },
+            enter: 'pop',
+            enteredAt: 1_000
+          }
+        ],
+        now: 1_000 + elapsed
+      })
+
+      const marker = vi
+        .mocked(mockContext.strokeRect)
+        .mock.calls.find(([, , width, height]) => width === 2 && height === 2)
+      expect(marker).toBeDefined()
+      const [x, y, width, height] = marker!
+      expect(width).toBe(2)
+      expect(height).toBe(2)
+      expect(x + width / 2).toBeCloseTo(0.875)
+      expect(y + height / 2).toBeCloseTo(0.7)
+    }
+  )
+})

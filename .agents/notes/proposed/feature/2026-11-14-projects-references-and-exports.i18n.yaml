@@ -1,0 +1,34 @@
+# Bilingual-pair consistency record for .agents/notes/proposed/feature/2026-11-14-projects-references-and-exports.md ↔ .agents/notes/proposed/feature/2026-11-14-projects-references-and-exports.zh.md: per heading
+# section, a hash of its English and Chinese blocks outside code blocks and generated regions.
+# After editing either side, bring the other along and re-record with:
+#   pnpm run verify-translation-pairing --write .agents/notes/proposed/feature/2026-11-14-projects-references-and-exports.md
+/agent-note-projects-and-exports-reference-the-library-they-do-not-own-it:
+  en: c1060ec8f768705e
+  zh: d6b4a777a3500fdd
+/agent-note-projects-and-exports-reference-the-library-they-do-not-own-it/problem:
+  en: c31a75a08ec7c659
+  zh: 2ad1e4ac6f3831fb
+/agent-note-projects-and-exports-reference-the-library-they-do-not-own-it/proposal:
+  en: db7f3b4cba14462c
+  zh: a4c713b83c77aee8
+/agent-note-projects-and-exports-reference-the-library-they-do-not-own-it/proposal/projects-and-references:
+  en: 11ea59186d784aa1
+  zh: 1bfedfdd985790c6
+/agent-note-projects-and-exports-reference-the-library-they-do-not-own-it/proposal/exports:
+  en: e32edad305082c58
+  zh: 3c811879aa5fe274
+/agent-note-projects-and-exports-reference-the-library-they-do-not-own-it/proposal/results:
+  en: 963316b6b6948298
+  zh: c674f90a8196f903
+/agent-note-projects-and-exports-reference-the-library-they-do-not-own-it/proposal/deletion-and-impact:
+  en: 8baa7d61aad13327
+  zh: 926f54daf5bd9782
+/agent-note-projects-and-exports-reference-the-library-they-do-not-own-it/alternatives-considered:
+  en: 7f9471549e368468
+  zh: 9e01af74fc36c5c5
+/agent-note-projects-and-exports-reference-the-library-they-do-not-own-it/acceptance-criteria:
+  en: 63eea0575c0f491e
+  zh: 930e0f4eed488845
+/agent-note-projects-and-exports-reference-the-library-they-do-not-own-it/risks:
+  en: 83e205b27ede5b14
+  zh: e09590e22bd17e78

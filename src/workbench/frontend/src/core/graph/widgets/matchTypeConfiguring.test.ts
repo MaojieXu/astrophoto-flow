@@ -1,0 +1,132 @@
+import { fromAny } from '@total-typescript/shoehorn'
+import { describe, expect, test } from 'vitest'
+import { effect, stop } from 'vue'
+
+import { LGraph, LGraphNode, LiteGraph } from '@/lib/litegraph/src/litegraph'
+import { transformInputSpecV1ToV2 } from '@/schemas/nodeDef/migration'
+import { app } from '@/scripts/app'
+import { useLitegraphService } from '@/services/litegraphService'
+
+function createMatchTypeNode(graph: LGraph) {
+  const { addNodeInput } = useLitegraphService()
+  const node = new LGraphNode('switch')
+  ;(node.constructor as { nodeData: unknown }).nodeData = {
+    name: 'ComfySwitchAny',
+    output_matchtypes: ['a']
+  }
+  node.addOutput('out', '*')
+  graph.add(node)
+
+  addNodeInput(
+    node,
+    transformInputSpecV1ToV2(
+      [
+        'COMFY_MATCHTYPE_V3',
+        { template: { allowed_types: '*', template_id: 'a' } }
+      ],
+      { name: 'on_true', isOptional: false }
+    )
+  )
+  addNodeInput(
+    node,
+    transformInputSpecV1ToV2(
+      [
+        'COMFY_MATCHTYPE_V3',
+        { template: { allowed_types: '*', template_id: 'a' } }
+      ],
+      { name: 'on_false', isOptional: false }
+    )
+  )
+
+  return node
+}
+
+function createSourceNode(graph: LGraph, type: string) {
+  const node = new LGraphNode('source')
+  node.addOutput('out', type)
+  graph.add(node)
+  return node
+}
+
+describe('MatchType during configure', () => {
+  test('skips type recalculation when configuringGraph is true', () => {
+    const graph = new LGraph()
+    const switchNode = createMatchTypeNode(graph)
+    const source1 = createSourceNode(graph, 'IMAGE')
+    const source2 = createSourceNode(graph, 'IMAGE')
+
+    source1.connect(0, switchNode, 0)
+    source2.connect(0, switchNode, 1)
+
+    expect(switchNode.inputs[0].link).not.toBeNull()
+    expect(switchNode.inputs[1].link).not.toBeNull()
+
+    const link1Id = switchNode.inputs[0].link!
+    const link2Id = switchNode.inputs[1].link!
+
+    const outputTypeBefore = switchNode.outputs[0].type
+    fromAny<{ configuringGraphLevel: number }, unknown>(
+      app
+    ).configuringGraphLevel = 1
+
+    try {
+      const link1 = graph.links[link1Id]
+      switchNode.onConnectionsChange?.(
+        LiteGraph.INPUT,
+        0,
+        true,
+        link1,
+        switchNode.inputs[0]
+      )
+
+      expect(switchNode.inputs[0].link).toBe(link1Id)
+      expect(switchNode.inputs[1].link).toBe(link2Id)
+      expect(graph.links[link1Id]).toBeDefined()
+      expect(graph.links[link2Id]).toBeDefined()
+      expect(switchNode.outputs[0].type).toBe(outputTypeBefore)
+    } finally {
+      fromAny<{ configuringGraphLevel: number }, unknown>(
+        app
+      ).configuringGraphLevel = 0
+    }
+  })
+
+  test('performs type recalculation during normal operation', () => {
+    const graph = new LGraph()
+    const switchNode = createMatchTypeNode(graph)
+    const source1 = createSourceNode(graph, 'IMAGE')
+    let recalculationCount = 0
+    const runner = effect(() => {
+      void switchNode.outputs[0].type
+      recalculationCount++
+    })
+
+    try {
+      expect(app.configuringGraph).toBe(false)
+
+      source1.connect(0, switchNode, 0)
+
+      expect(switchNode.inputs[0].link).not.toBeNull()
+      expect(switchNode.outputs[0].type).toBe('IMAGE')
+      expect(recalculationCount).toBeGreaterThan(1)
+    } finally {
+      stop(runner)
+    }
+  })
+
+  test('connects both inputs with same type', () => {
+    const graph = new LGraph()
+    const switchNode = createMatchTypeNode(graph)
+    const source1 = createSourceNode(graph, 'IMAGE')
+    const source2 = createSourceNode(graph, 'IMAGE')
+
+    expect(app.configuringGraph).toBe(false)
+
+    source1.connect(0, switchNode, 0)
+    source2.connect(0, switchNode, 1)
+
+    expect(switchNode.inputs[0].link).not.toBeNull()
+    expect(switchNode.inputs[1].link).not.toBeNull()
+    expect(switchNode.outputs[0].type).toBe('IMAGE')
+  })
+})

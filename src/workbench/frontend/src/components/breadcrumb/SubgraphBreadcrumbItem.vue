@@ -1,0 +1,216 @@
+<template>
+  <DefineTrigger>
+    <Button
+      variant="textonly"
+      size="unset"
+      :tooltip="tooltipText"
+      tooltip-side="bottom"
+      :data-testid="`subgraph-breadcrumb-item-${item.key}`"
+      :data-active="isActive ? '' : undefined"
+      draggable="false"
+      :class="
+        cn(
+          'p-breadcrumb-item-link flex h-8 cursor-pointer appearance-none items-center justify-start gap-0 overflow-hidden border-none bg-transparent px-2 py-0 text-inherit select-none [font:inherit] hover:bg-transparent',
+          isActive &&
+            'p-breadcrumb-item-link-icon-visible gap-1 text-text-primary',
+          menuOpen && 'p-breadcrumb-item-link-menu-visible'
+        )
+      "
+      @click="handleClick"
+      @keydown="handleKeydown"
+    >
+      <i
+        v-if="hasMissingNodes && isRoot"
+        data-testid="subgraph-breadcrumb-missing-nodes-icon"
+        class="icon-[lucide--triangle-alert] text-warning-background"
+      />
+      <span
+        ref="labelRef"
+        class="p-breadcrumb-item-label max-w-72 truncate px-2"
+      >
+        {{ item.label }}
+      </span>
+      <Badge
+        v-if="item.isBlueprint"
+        data-testid="subgraph-breadcrumb-blueprint-tag"
+        severity="primary"
+      >
+        {{ t('breadcrumbsMenu.blueprint') }}
+      </Badge>
+      <i v-if="isActive" class="pi pi-angle-down text-2xs"></i>
+    </Button>
+  </DefineTrigger>
+  <Menu
+    v-if="isActive"
+    :open="menuOpen"
+    :items="menuItems"
+    :data-testid="`subgraph-breadcrumb-menu-${item.key}`"
+    @update:open="menuOpen = Boolean($event && !isEditing)"
+    @close-auto-focus="onMenuCloseAutoFocus"
+  >
+    <template #trigger><ReuseTrigger /></template>
+  </Menu>
+  <ReuseTrigger v-else />
+  <Input
+    v-if="isEditing"
+    ref="itemInputRef"
+    v-model="itemLabel"
+    data-testid="subgraph-breadcrumb-rename-input"
+    class="fixed z-10000 w-50 p-2 text-[.8rem]"
+    @blur="inputBlur(false)"
+    @click.stop
+    @keydown.enter="inputBlur(true)"
+    @keydown.esc="inputBlur(false)"
+  />
+</template>
+
+<script setup lang="ts">
+import { cn } from '@comfyorg/tailwind-utils'
+import { createReusableTemplate } from '@vueuse/core'
+import { computed, nextTick, ref, toValue } from 'vue'
+import { useI18n } from 'vue-i18n'
+
+import Badge from '@/components/ui/badge/Badge.vue'
+import Button from '@/components/ui/button/Button.vue'
+import Input from '@/components/ui/input/Input.vue'
+import Menu from '@/components/ui/menu/Menu.vue'
+import type { MenuItemAction } from '@/components/ui/menu/types'
+import { useWorkflowActionsMenu } from '@/composables/useWorkflowActionsMenu'
+import { useWorkflowService } from '@/platform/workflow/core/services/workflowService'
+import {
+  ComfyWorkflow,
+  useWorkflowStore
+} from '@/platform/workflow/management/stores/workflowStore'
+import { app } from '@/scripts/app'
+import { useDialogService } from '@/services/dialogService'
+import { useCommandStore } from '@/stores/commandStore'
+import { useNodeDefStore } from '@/stores/nodeDefStore'
+import { isMissingWarningVisible } from '@/platform/settings/missingWarningVisibility'
+import { useSubgraphNavigationStore } from '@/stores/subgraphNavigationStore'
+import { ensureWorkflowSuffix, getWorkflowSuffix } from '@/utils/formatUtil'
+import { graphHasMissingNodes } from '@/workbench/extensions/manager/utils/graphHasMissingNodes'
+
+export interface BreadcrumbItem extends MenuItemAction {
+  isBlueprint?: boolean
+  updateTitle?: (title: string) => void
+}
+
+interface Props {
+  item: BreadcrumbItem
+  isActive?: boolean
+}
+
+const { item, isActive } = defineProps<Props>()
+const [DefineTrigger, ReuseTrigger] = createReusableTemplate()
+
+const nodeDefStore = useNodeDefStore()
+const hasMissingNodes = computed(
+  () =>
+    isMissingWarningVisible('nodes') &&
+    graphHasMissingNodes(app.rootGraph, nodeDefStore.nodeDefsByName)
+)
+
+const { t } = useI18n()
+const menuOpen = ref(false)
+const dialogService = useDialogService()
+const workflowStore = useWorkflowStore()
+const workflowService = useWorkflowService()
+const isEditing = ref(false)
+const itemLabel = ref<string>()
+const itemInputRef = ref<InstanceType<typeof Input>>()
+const labelRef = ref<HTMLSpanElement>()
+
+const rename = async (
+  newName: string | null | undefined,
+  initialName: string
+) => {
+  if (newName && newName !== initialName) {
+    // Synchronize the node titles with the new name
+    item.updateTitle?.(newName)
+
+    if (workflowStore.activeSubgraph) {
+      workflowStore.activeSubgraph.name = newName
+    } else if (workflowStore.activeWorkflow) {
+      try {
+        const suffix = getWorkflowSuffix(workflowStore.activeWorkflow.suffix)
+        await workflowService.renameWorkflow(
+          workflowStore.activeWorkflow,
+          ComfyWorkflow.basePath + ensureWorkflowSuffix(newName, suffix)
+        )
+      } catch (error) {
+        console.error(error)
+        dialogService.showErrorDialog(error)
+        return
+      }
+    }
+
+    // Force the navigation stack to recompute the labels
+    // TODO: investigate if there is a better way to do this
+    const navigationStore = useSubgraphNavigationStore()
+    navigationStore.restoreState(navigationStore.exportState())
+  }
+}
+
+const isRoot = item.key === 'root'
+
+const tooltipText = computed(() => {
+  if (hasMissingNodes.value && isRoot) {
+    return t('breadcrumbsMenu.missingNodesWarning')
+  }
+  return toValue(item.label)
+})
+
+const startRename = async () => {
+  // Check if element is hidden (collapsed breadcrumb)
+  // When collapsed, root item is hidden via CSS display:none, so use rename command
+  if (isRoot && labelRef.value?.offsetParent === null) {
+    await useCommandStore().execute('Comfy.RenameWorkflow')
+    return
+  }
+
+  isEditing.value = true
+  itemLabel.value = item.label as string
+  void nextTick(() => {
+    itemInputRef.value?.focus()
+    itemInputRef.value?.select()
+  })
+}
+
+const { menuItems } = useWorkflowActionsMenu(startRename, { isRoot })
+
+function onMenuCloseAutoFocus(event: Event) {
+  if (isEditing.value) event.preventDefault()
+}
+
+function handleKeydown(event: KeyboardEvent) {
+  if (isActive || isEditing.value || !['Enter', ' '].includes(event.key)) return
+  event.preventDefault()
+  event.stopPropagation()
+  item.command?.({ item, originalEvent: event })
+}
+
+const handleClick = (event: MouseEvent) => {
+  if (isEditing.value) {
+    return
+  }
+
+  if (event.detail === 1) {
+    if (!isActive) {
+      item.command?.({ item: item, originalEvent: event })
+    }
+  } else if (isActive && event.detail === 2) {
+    menuOpen.value = false
+    event.stopPropagation()
+    event.preventDefault()
+    void startRename()
+  }
+}
+
+const inputBlur = async (doRename: boolean) => {
+  if (doRename) {
+    await rename(itemLabel.value, item.label as string)
+  }
+
+  isEditing.value = false
+}
+</script>

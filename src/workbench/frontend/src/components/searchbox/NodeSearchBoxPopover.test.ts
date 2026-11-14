@@ -1,0 +1,338 @@
+import { getActivePinia } from 'pinia'
+import { render, screen } from '@testing-library/vue'
+import userEvent from '@testing-library/user-event'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { computed, defineComponent, nextTick } from 'vue'
+import { createI18n } from 'vue-i18n'
+import { fromPartial } from '@total-typescript/shoehorn'
+
+import { vRekaZIndex } from '@/components/dialog/vRekaZIndex'
+import { CORE_SETTINGS } from '@/platform/settings/constants/coreSettings'
+import { useSettingStore } from '@/platform/settings/settingStore'
+import type { Settings } from '@/platform/settings/types'
+import { useCanvasStore } from '@/renderer/core/canvas/canvasStore'
+import { useLitegraphService } from '@/services/litegraphService'
+import type { ComfyNodeDefImpl } from '@/stores/nodeDefStore'
+import { useSearchBoxStore } from '@/stores/workspace/searchBoxStore'
+import type { FuseFilter, FuseFilterWithValue } from '@/utils/fuseUtil'
+
+import NodeSearchBoxPopover from './NodeSearchBoxPopover.vue'
+
+const coreSettingsById = Object.fromEntries(CORE_SETTINGS.map((s) => [s.id, s]))
+
+vi.mock(import('@/services/litegraphService'))
+
+type EmitAddFilter = (filter: FuseFilterWithValue<ComfyNodeDefImpl>) => void
+type EmitAddNode = (nodeDef: ComfyNodeDefImpl, dragEvent?: MouseEvent) => void
+
+function createFilter(
+  id: string,
+  value: string
+): FuseFilterWithValue<ComfyNodeDefImpl> {
+  return {
+    filterDef: { id } as FuseFilter<ComfyNodeDefImpl>,
+    value
+  }
+}
+
+const OpenDialog = defineComponent({
+  directives: { rekaZIndex: vRekaZIndex },
+  template: '<div v-reka-z-index data-testid="open-dialog" />'
+})
+
+describe('NodeSearchBoxPopover', () => {
+  const i18n = createI18n({
+    legacy: false,
+    locale: 'en',
+    messages: { en: {} }
+  })
+
+  function renderComponent(settings: Partial<Settings> = {}) {
+    let emitAddFilter: EmitAddFilter | null = null
+    let emitAddNodeV1: EmitAddNode | null = null
+    let emitAddNodeV2: EmitAddNode | null = null
+
+    const NodeSearchBoxStub = defineComponent({
+      name: 'NodeSearchBox',
+      props: {
+        filters: { type: Array, default: () => [] }
+      },
+      emits: ['addFilter', 'removeFilter', 'addNode'],
+      setup(props, { emit }) {
+        emitAddFilter = (filter) => emit('addFilter', filter)
+        emitAddNodeV1 = (nodeDef, dragEvent) =>
+          emit('addNode', nodeDef, dragEvent)
+        const filterCount = computed(() => props.filters.length)
+        return {
+          filterCount,
+          addTestFilter: () =>
+            emit('addFilter', createFilter('outputType', 'IMAGE')),
+          addTestNode: () => emit('addNode', { name: 'KSampler' })
+        }
+      },
+      template: `
+        <output aria-label="filter count">{{ filterCount }}</output>
+        <button @click="addTestFilter">Add filter</button>
+        <button @click="addTestNode">Add node</button>
+      `
+    })
+
+    const NodeSearchContentStub = defineComponent({
+      name: 'NodeSearchContent',
+      props: {
+        filters: { type: Array, default: () => [] }
+      },
+      emits: ['addFilter', 'removeFilter', 'addNode', 'hoverNode'],
+      setup(_, { emit }) {
+        emitAddNodeV2 = (nodeDef, dragEvent) =>
+          emit('addNode', nodeDef, dragEvent)
+        return {}
+      },
+      template: '<div data-testid="search-content-v2"></div>'
+    })
+
+    const pinia = getActivePinia()!
+    const settingStore = useSettingStore()
+    settingStore.settingValues = settings
+    settingStore.settingsById = coreSettingsById
+    useSearchBoxStore().visible = false
+    useCanvasStore().canvas = fromPartial({
+      linkConnector: {
+        events: new EventTarget(),
+        reset: vi.fn()
+      },
+      setDirty: vi.fn()
+    })
+
+    const result = render(NodeSearchBoxPopover, {
+      global: {
+        plugins: [i18n, pinia],
+        stubs: {
+          NodeSearchBox: NodeSearchBoxStub,
+          NodeSearchContent: NodeSearchContentStub,
+          NodePreviewCard: true,
+          Dialog: { template: '<div><slot /></div>' },
+          DialogPortal: { template: '<div><slot /></div>' },
+          DialogOverlay: {
+            template: '<div data-testid="search-overlay" />'
+          },
+          DialogContent: {
+            template: '<div data-testid="search-content"><slot /></div>'
+          },
+          DialogTitle: { template: '<h2><slot /></h2>' }
+        }
+      }
+    })
+
+    return {
+      ...result,
+      get emitAddFilter() {
+        if (!emitAddFilter) throw new Error('NodeSearchBox stub did not mount')
+        return emitAddFilter
+      },
+      get emitAddNodeV1() {
+        if (!emitAddNodeV1) throw new Error('NodeSearchBox stub did not mount')
+        return emitAddNodeV1
+      },
+      get emitAddNodeV2() {
+        if (!emitAddNodeV2)
+          throw new Error('NodeSearchContent stub did not mount')
+        return emitAddNodeV2
+      },
+      pinia
+    }
+  }
+
+  beforeEach(() => {
+    vi.mocked(useLitegraphService().addNodeOnGraph).mockReturnValue(null)
+  })
+
+  describe('addFilter duplicate prevention', () => {
+    it('should not add a duplicate filter with same id and value', async () => {
+      const { emitAddFilter } = renderComponent({
+        'Comfy.NodeSearchBoxImpl': 'v1 (legacy)'
+      })
+
+      emitAddFilter(createFilter('outputType', 'IMAGE'))
+      await nextTick()
+      emitAddFilter(createFilter('outputType', 'IMAGE'))
+      await nextTick()
+
+      expect(screen.getByLabelText('filter count')).toHaveTextContent('1')
+    })
+
+    it('should allow filters with same id but different values', async () => {
+      const { emitAddFilter } = renderComponent({
+        'Comfy.NodeSearchBoxImpl': 'v1 (legacy)'
+      })
+
+      emitAddFilter(createFilter('outputType', 'IMAGE'))
+      await nextTick()
+      emitAddFilter(createFilter('outputType', 'MASK'))
+      await nextTick()
+
+      expect(screen.getByLabelText('filter count')).toHaveTextContent('2')
+    })
+
+    it('should allow filters with different ids but same value', async () => {
+      const { emitAddFilter } = renderComponent({
+        'Comfy.NodeSearchBoxImpl': 'v1 (legacy)'
+      })
+
+      emitAddFilter(createFilter('outputType', 'IMAGE'))
+      await nextTick()
+      emitAddFilter(createFilter('inputType', 'IMAGE'))
+      await nextTick()
+
+      expect(screen.getByLabelText('filter count')).toHaveTextContent('2')
+    })
+  })
+
+  it.for([
+    {
+      closedBy: 'adding a node',
+      close: (user: ReturnType<typeof userEvent.setup>) =>
+        user.click(screen.getByRole('button', { name: 'Add node' }))
+    },
+    {
+      closedBy: 'the toggle command',
+      close: () => useSearchBoxStore().toggleVisible()
+    }
+  ])('clears filters after $closedBy closes the search', async ({ close }) => {
+    const user = userEvent.setup()
+    vi.spyOn(window, 'requestAnimationFrame').mockImplementation((callback) => {
+      callback(0)
+      return 0
+    })
+    vi.mocked(useLitegraphService().addNodeOnGraph).mockReturnValue(
+      fromPartial({})
+    )
+    const { pinia } = renderComponent({
+      'Comfy.NodeSearchBoxImpl': 'v1 (legacy)'
+    })
+    const searchBoxStore = useSearchBoxStore(pinia)
+
+    searchBoxStore.visible = true
+    await user.click(screen.getByRole('button', { name: 'Add filter' }))
+    expect(screen.getByLabelText('filter count')).toHaveTextContent('1')
+
+    await close(user)
+    expect(searchBoxStore.visible).toBe(false)
+    searchBoxStore.visible = true
+    await nextTick()
+
+    expect(screen.getByLabelText('filter count')).toHaveTextContent('0')
+  })
+
+  it('opens above an already open dialog', async () => {
+    render(OpenDialog)
+    const dialogZIndex = Number(screen.getByTestId('open-dialog').style.zIndex)
+    const { pinia } = renderComponent({
+      'Comfy.NodeSearchBoxImpl': 'v1 (legacy)'
+    })
+
+    useSearchBoxStore(pinia).visible = true
+    await nextTick()
+
+    expect(
+      Number(screen.getByTestId('search-overlay').style.zIndex)
+    ).toBeGreaterThan(dialogZIndex)
+    expect(
+      Number(screen.getByTestId('search-content').style.zIndex)
+    ).toBeGreaterThan(dialogZIndex)
+  })
+
+  describe('addNode ghost flag (FollowCursor setting)', () => {
+    const nodeDef = { name: 'KSampler' } as ComfyNodeDefImpl
+
+    it('should default ghost to true when v2 search is active and FollowCursor is unset', async () => {
+      const { emitAddNodeV2 } = renderComponent({
+        'Comfy.NodeSearchBoxImpl': 'default'
+      })
+      emitAddNodeV2(nodeDef)
+      await nextTick()
+
+      expect(useLitegraphService().addNodeOnGraph).toHaveBeenCalledWith(
+        nodeDef,
+        expect.objectContaining({ pos: expect.any(Array) }),
+        expect.objectContaining({ ghost: true })
+      )
+    })
+
+    it('should pass ghost: true when v2 search is active and FollowCursor is enabled', async () => {
+      const { emitAddNodeV2 } = renderComponent({
+        'Comfy.NodeSearchBoxImpl': 'default',
+        'Comfy.NodeSearchBoxImpl.FollowCursor': true
+      })
+      emitAddNodeV2(nodeDef)
+      await nextTick()
+
+      expect(useLitegraphService().addNodeOnGraph).toHaveBeenCalledWith(
+        nodeDef,
+        expect.objectContaining({ pos: expect.any(Array) }),
+        expect.objectContaining({ ghost: true })
+      )
+    })
+
+    it('should pass ghost: false when v2 search is active but FollowCursor is disabled', async () => {
+      const { emitAddNodeV2 } = renderComponent({
+        'Comfy.NodeSearchBoxImpl': 'default',
+        'Comfy.NodeSearchBoxImpl.FollowCursor': false
+      })
+      emitAddNodeV2(nodeDef)
+      await nextTick()
+
+      expect(useLitegraphService().addNodeOnGraph).toHaveBeenCalledWith(
+        nodeDef,
+        expect.objectContaining({ pos: expect.any(Array) }),
+        expect.objectContaining({ ghost: false })
+      )
+    })
+
+    it('should pass ghost: false when v1 legacy search box is used', async () => {
+      const { emitAddNodeV1 } = renderComponent({
+        'Comfy.NodeSearchBoxImpl': 'v1 (legacy)',
+        'Comfy.NodeSearchBoxImpl.FollowCursor': true
+      })
+      emitAddNodeV1(nodeDef)
+      await nextTick()
+
+      expect(useLitegraphService().addNodeOnGraph).toHaveBeenCalledWith(
+        nodeDef,
+        expect.objectContaining({ pos: expect.any(Array) }),
+        expect.objectContaining({ ghost: false })
+      )
+    })
+
+    it('should pass ghost: false when litegraph legacy search box is used', async () => {
+      const { emitAddNodeV1 } = renderComponent({
+        'Comfy.NodeSearchBoxImpl': 'litegraph (legacy)',
+        'Comfy.NodeSearchBoxImpl.FollowCursor': true
+      })
+      emitAddNodeV1(nodeDef)
+      await nextTick()
+
+      expect(useLitegraphService().addNodeOnGraph).toHaveBeenCalledWith(
+        nodeDef,
+        expect.objectContaining({ pos: expect.any(Array) }),
+        expect.objectContaining({ ghost: false })
+      )
+    })
+
+    it('should forward the dragEvent through to addNodeOnGraph', async () => {
+      const dragEvent = new MouseEvent('mousedown')
+      const { emitAddNodeV2 } = renderComponent({
+        'Comfy.NodeSearchBoxImpl': 'default',
+        'Comfy.NodeSearchBoxImpl.FollowCursor': true
+      })
+      emitAddNodeV2(nodeDef, dragEvent)
+      await nextTick()
+
+      expect(useLitegraphService().addNodeOnGraph).toHaveBeenCalledWith(
+        nodeDef,
+        expect.objectContaining({ pos: expect.any(Array) }),
+        expect.objectContaining({ ghost: true, dragEvent })
+      )
+    })
+  })
+})

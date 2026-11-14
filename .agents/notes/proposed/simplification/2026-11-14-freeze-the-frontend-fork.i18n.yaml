@@ -1,0 +1,22 @@
+# Bilingual-pair consistency record for .agents/notes/proposed/simplification/2026-11-14-freeze-the-frontend-fork.md ↔ .agents/notes/proposed/simplification/2026-11-14-freeze-the-frontend-fork.zh.md: per heading
+# section, a hash of its English and Chinese blocks outside code blocks and generated regions.
+# After editing either side, bring the other along and re-record with:
+#   pnpm run verify-translation-pairing --write .agents/notes/proposed/simplification/2026-11-14-freeze-the-frontend-fork.md
+/agent-note-keep-the-frontend-fork-verbatim-and-freeze-it:
+  en: 2b3739ad24688694
+  zh: 026a9127ed56b24d
+/agent-note-keep-the-frontend-fork-verbatim-and-freeze-it/problem:
+  en: 75c5257323edd293
+  zh: f7c3c2916c831637
+/agent-note-keep-the-frontend-fork-verbatim-and-freeze-it/proposal:
+  en: f3bd06e2dfec92c3
+  zh: 756b9048f8a8d551
+/agent-note-keep-the-frontend-fork-verbatim-and-freeze-it/alternatives-considered:
+  en: 563ae76053d5134f
+  zh: 7a94d1a93b4c3bdc
+/agent-note-keep-the-frontend-fork-verbatim-and-freeze-it/acceptance-criteria:
+  en: 6ebf9d71b02a3e27
+  zh: 9c6a5b93c8b9d58c
+/agent-note-keep-the-frontend-fork-verbatim-and-freeze-it/risks:
+  en: 960041d999e06d69
+  zh: 28b5ceea30bf7463

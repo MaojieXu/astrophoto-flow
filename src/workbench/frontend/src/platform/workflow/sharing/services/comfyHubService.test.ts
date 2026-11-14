@@ -1,0 +1,191 @@
+import { assert, describe, expect, it, vi } from 'vitest'
+import { api } from '@/scripts/api'
+
+vi.mock(import('@/scripts/api'))
+
+const { useComfyHubService } = await import('./comfyHubService')
+
+function mockJsonResponse(payload: unknown, ok = true, status = 200): Response {
+  return {
+    ok,
+    status,
+    json: async () => payload
+  } as Response
+}
+
+describe('useComfyHubService', () => {
+  it('requests upload url and returns token payload', async () => {
+    vi.mocked(api.fetchApi).mockResolvedValue(
+      mockJsonResponse({
+        upload_url: 'https://upload.example.com/object',
+        public_url: 'https://cdn.example.com/object',
+        token: 'upload-token'
+      })
+    )
+
+    const service = useComfyHubService()
+    const result = await service.requestAssetUploadUrl({
+      filename: 'thumb.png',
+      contentType: 'image/png'
+    })
+
+    expect(api.fetchApi).toHaveBeenCalledWith('/hub/assets/upload-url', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        filename: 'thumb.png',
+        content_type: 'image/png'
+      })
+    })
+    expect(result).toEqual({
+      uploadUrl: 'https://upload.example.com/object',
+      publicUrl: 'https://cdn.example.com/object',
+      token: 'upload-token'
+    })
+  })
+
+  it('uploads file to presigned url with PUT', async () => {
+    vi.mocked(fetch).mockResolvedValueOnce(Response.json({}))
+
+    const service = useComfyHubService()
+    const file = new File(['payload'], 'avatar.png', { type: 'image/png' })
+    await service.uploadFileToPresignedUrl({
+      uploadUrl: 'https://upload.example.com/object',
+      file,
+      contentType: 'image/png'
+    })
+
+    expect(fetch).toHaveBeenCalledWith('https://upload.example.com/object', {
+      method: 'PUT',
+      headers: {
+        'Content-Type': 'image/png'
+      },
+      body: file
+    })
+  })
+
+  it('creates profile with workspace_id JSON body', async () => {
+    vi.mocked(api.fetchApi).mockResolvedValue(
+      mockJsonResponse({
+        id: 'profile-1',
+        username: 'builder',
+        display_name: 'Builder',
+        description: 'Builds workflows',
+        avatar_url: 'https://cdn.example.com/avatar.png',
+        website_urls: []
+      })
+    )
+
+    const service = useComfyHubService()
+    const profile = await service.createProfile({
+      workspaceId: 'workspace-1',
+      username: 'builder',
+      displayName: 'Builder',
+      description: 'Builds workflows',
+      avatarToken: 'avatar-token'
+    })
+
+    expect(api.fetchApi).toHaveBeenCalledWith('/hub/profiles', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        workspace_id: 'workspace-1',
+        username: 'builder',
+        display_name: 'Builder',
+        description: 'Builds workflows',
+        avatar_token: 'avatar-token'
+      })
+    })
+    expect(profile).toEqual({
+      username: 'builder',
+      name: 'Builder',
+      description: 'Builds workflows',
+      profilePictureUrl: 'https://cdn.example.com/avatar.png',
+      coverImageUrl: undefined
+    })
+  })
+
+  it('publishes workflow with mapped thumbnail enum', async () => {
+    vi.mocked(api.fetchApi).mockResolvedValue(
+      mockJsonResponse({
+        share_id: 'share-1',
+        workflow_id: 'workflow-1',
+        thumbnail_type: 'image_comparison'
+      })
+    )
+
+    const service = useComfyHubService()
+    await service.publishWorkflow({
+      username: 'builder',
+      name: 'My Flow',
+      workflowFilename: 'workflows/my-flow.json',
+      assetIds: ['asset-1'],
+      thumbnailType: 'imageComparison',
+      thumbnailTokenOrUrl: 'thumb-token',
+      thumbnailComparisonTokenOrUrl: 'thumb-compare-token',
+      sampleImageTokensOrUrls: ['sample-1']
+    })
+
+    const [, options] = vi.mocked(api.fetchApi).mock.calls[0]
+    assert.exists(options)
+    assert(typeof options.body === 'string')
+    const body = JSON.parse(options.body)
+    expect(body).toMatchObject({
+      username: 'builder',
+      name: 'My Flow',
+      workflow_filename: 'workflows/my-flow.json',
+      asset_ids: ['asset-1'],
+      thumbnail_type: 'image_comparison',
+      thumbnail_token_or_url: 'thumb-token',
+      thumbnail_comparison_token_or_url: 'thumb-compare-token',
+      sample_image_tokens_or_urls: ['sample-1']
+    })
+    expect(api.fetchApi).toHaveBeenCalledWith('/hub/workflows', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body)
+    })
+  })
+
+  it('fetches tag labels from /hub/labels?type=tag', async () => {
+    vi.mocked(api.fetchApi).mockResolvedValue(
+      mockJsonResponse({
+        labels: [
+          { name: 'video', display_name: 'Video', type: 'tag' },
+          { name: 'text-to-image', display_name: 'Text to Image', type: 'tag' }
+        ]
+      })
+    )
+
+    const service = useComfyHubService()
+    const tags = await service.fetchTagLabels()
+
+    expect(api.fetchApi).toHaveBeenCalledWith('/hub/labels?type=tag')
+    expect(tags).toEqual(['Video', 'Text to Image'])
+  })
+
+  it('fetches current profile from /hub/profiles/me', async () => {
+    vi.mocked(api.fetchApi).mockResolvedValue(
+      mockJsonResponse({
+        id: 'profile-1',
+        username: 'builder',
+        display_name: 'Builder',
+        description: 'Builds workflows',
+        avatar_url: 'https://cdn.example.com/avatar.png',
+        website_urls: []
+      })
+    )
+
+    const service = useComfyHubService()
+    const profile = await service.getMyProfile()
+
+    expect(api.fetchApi).toHaveBeenCalledWith('/hub/profiles/me')
+    expect(profile).toEqual({
+      username: 'builder',
+      name: 'Builder',
+      description: 'Builds workflows',
+      profilePictureUrl: 'https://cdn.example.com/avatar.png',
+      coverImageUrl: undefined
+    })
+  })
+})

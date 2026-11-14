@@ -1,0 +1,34 @@
+# Bilingual-pair consistency record for .agents/notes/proposed/architecture/2026-11-14-comfyui-manager-owns-bundle-installation.md ↔ .agents/notes/proposed/architecture/2026-11-14-comfyui-manager-owns-bundle-installation.zh.md: per heading
+# section, a hash of its English and Chinese blocks outside code blocks and generated regions.
+# After editing either side, bring the other along and re-record with:
+#   pnpm run verify-translation-pairing --write .agents/notes/proposed/architecture/2026-11-14-comfyui-manager-owns-bundle-installation.md
+/agent-note-the-comfyui-manager-owns-bundle-installation:
+  en: aeec19da5348eaab
+  zh: 7fc55bc5188aab4b
+/agent-note-the-comfyui-manager-owns-bundle-installation/problem:
+  en: aa11dfaec02212f3
+  zh: 541f55dc8aa56a9e
+/agent-note-the-comfyui-manager-owns-bundle-installation/proposal:
+  en: 7d288672eb7ac7e1
+  zh: cbd107b6ee2fa7ac
+/agent-note-the-comfyui-manager-owns-bundle-installation/proposal/manager-responsibilities:
+  en: 63fa63f389a410b6
+  zh: b9e45d02fea3a227
+/agent-note-the-comfyui-manager-owns-bundle-installation/proposal/workbench-responsibilities:
+  en: fcaa75c8a772500e
+  zh: c1bb1b3513c34b93
+/agent-note-the-comfyui-manager-owns-bundle-installation/proposal/removal-and-active-references:
+  en: b45ce7bc5df3a914
+  zh: 8c36c141c2e51290
+/agent-note-the-comfyui-manager-owns-bundle-installation/proposal/validation-timing:
+  en: 22b597072e9dce01
+  zh: dd9310246261f77e
+/agent-note-the-comfyui-manager-owns-bundle-installation/alternatives-considered:
+  en: 8bae06fd42018520
+  zh: 28bdff8d93597ba6
+/agent-note-the-comfyui-manager-owns-bundle-installation/acceptance-criteria:
+  en: b7798c38b57c8cc6
+  zh: 9517b23428d64fc8
+/agent-note-the-comfyui-manager-owns-bundle-installation/risks:
+  en: 08af8433f3dfc5eb
+  zh: 8f033bccf7e177f2

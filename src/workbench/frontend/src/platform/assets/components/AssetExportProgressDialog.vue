@@ -1,0 +1,267 @@
+<script setup lang="ts">
+import { computed, ref } from 'vue'
+import { useI18n } from 'vue-i18n'
+
+import Loader from '@/components/loader/Loader.vue'
+import ToastPanel from '@/components/ui/toast/ToastPanel.vue'
+import Button from '@/components/ui/button/Button.vue'
+import Tooltip from '@/components/ui/tooltip/Tooltip.vue'
+import TooltipContent from '@/components/ui/tooltip/TooltipContent.vue'
+import TooltipTrigger from '@/components/ui/tooltip/TooltipTrigger.vue'
+import type { AssetExport } from '@/stores/assetExportStore'
+import { useAssetExportStore } from '@/stores/assetExportStore'
+import { cn } from '@comfyorg/tailwind-utils'
+
+const { t } = useI18n()
+const assetExportStore = useAssetExportStore()
+
+const visible = computed(() => assetExportStore.hasExports)
+const isExpanded = ref(false)
+
+const exportJobs = computed(() => assetExportStore.exportList)
+const failedJobs = computed(() =>
+  assetExportStore.finishedExports.filter((e) => e.status === 'failed')
+)
+const cancelledJobs = computed(() =>
+  assetExportStore.finishedExports.filter((e) => e.status === 'cancelled')
+)
+
+const isInProgress = computed(() => assetExportStore.hasActiveExports)
+const currentJobName = computed(() => {
+  const activeJob = exportJobs.value.find((job) => job.status === 'running')
+  return activeJob?.exportName || t('exportToast.preparingExport')
+})
+
+function jobDisplayName(job: AssetExport): string {
+  if (job.status === 'failed') return job.error || t('exportToast.exportError')
+  return job.exportName || t('exportToast.preparingExport')
+}
+
+const completedCount = computed(() => assetExportStore.finishedExports.length)
+const totalCount = computed(() => exportJobs.value.length)
+
+const footerLabel = computed(() => {
+  if (isInProgress.value) return currentJobName.value
+  if (failedJobs.value.length > 0)
+    return t('exportToast.exportFailed', { count: failedJobs.value.length })
+  if (cancelledJobs.value.length > 0) return t('electronFileDownload.cancelled')
+  return t('exportToast.allExportsCompleted')
+})
+
+const announcement = computed(() =>
+  isInProgress.value ? t('exportToast.exportingAssets') : footerLabel.value
+)
+
+const footerIconClass = computed(() => {
+  if (isInProgress.value)
+    return 'icon-[lucide--loader-circle] animate-spin text-muted-foreground'
+  if (failedJobs.value.length > 0)
+    return 'icon-[lucide--circle-alert] text-destructive-background'
+  if (cancelledJobs.value.length > 0)
+    return 'icon-[lucide--circle-x] text-muted-foreground'
+  return 'icon-[lucide--check-circle] text-jade-600'
+})
+
+function progressPercent(job: AssetExport): number {
+  return Math.round(job.progress * 100)
+}
+
+function closeDialog() {
+  assetExportStore.clearFinishedExports()
+  isExpanded.value = false
+}
+</script>
+
+<template>
+  <ToastPanel v-model:expanded="isExpanded" :visible :announcement>
+    <template #default>
+      <div
+        class="flex h-12 items-center justify-between border-b border-border-default px-4"
+      >
+        <h3 class="text-sm font-bold text-base-foreground">
+          {{ t('exportToast.exportingAssets') }}
+        </h3>
+      </div>
+
+      <div class="relative max-h-75 overflow-y-auto p-4">
+        <div class="flex flex-col gap-2">
+          <div
+            v-for="job in exportJobs"
+            :key="job.taskId"
+            :class="
+              cn(
+                'flex items-center justify-between rounded-lg bg-modal-card-background px-4 py-3',
+                job.status === 'completed' && 'opacity-50'
+              )
+            "
+          >
+            <div class="min-w-0 flex-1">
+              <span
+                :class="
+                  cn(
+                    'block truncate text-sm',
+                    job.status === 'failed'
+                      ? 'text-destructive-background'
+                      : 'text-base-foreground'
+                  )
+                "
+              >
+                {{ jobDisplayName(job) }}
+              </span>
+              <span
+                v-if="job.assetsTotal > 0"
+                class="text-xs text-muted-foreground"
+              >
+                {{ job.assetsAttempted }}/{{ job.assetsTotal }}
+              </span>
+            </div>
+
+            <div class="flex items-center gap-2">
+              <template v-if="job.status === 'failed'">
+                <i
+                  class="icon-[lucide--circle-alert] size-4 text-destructive-background"
+                />
+              </template>
+              <template
+                v-else-if="job.status === 'completed' && job.downloadError"
+              >
+                <span
+                  class="max-w-32 truncate text-xs text-destructive-background"
+                >
+                  {{ job.downloadError }}
+                </span>
+                <Button
+                  variant="muted-textonly"
+                  size="icon"
+                  :aria-label="t('exportToast.retryDownload')"
+                  @click.stop="assetExportStore.triggerDownload(job, true)"
+                >
+                  <i
+                    class="icon-[lucide--rotate-ccw] size-4 text-destructive-background"
+                  />
+                </Button>
+              </template>
+              <template v-else-if="job.status === 'completed'">
+                <Button
+                  variant="muted-textonly"
+                  size="icon"
+                  :aria-label="t('exportToast.downloadExport')"
+                  @click.stop="assetExportStore.triggerDownload(job, true)"
+                >
+                  <i
+                    class="icon-[lucide--download] size-4 text-success-background"
+                  />
+                </Button>
+              </template>
+              <template v-else-if="job.status === 'cancelled'">
+                <span class="text-xs text-muted-foreground">
+                  {{ t('electronFileDownload.cancelled') }}
+                </span>
+              </template>
+              <template v-else-if="job.status === 'running'">
+                <Loader size="sm" class="text-base-foreground" />
+                <span class="text-xs text-base-foreground">
+                  {{ progressPercent(job) }}%
+                </span>
+              </template>
+              <template v-else>
+                <span class="text-xs text-muted-foreground">
+                  {{ t('progressToast.pending') }}
+                </span>
+              </template>
+            </div>
+          </div>
+        </div>
+
+        <div
+          v-if="exportJobs.length === 0"
+          class="flex flex-col items-center justify-center py-6 text-center"
+        >
+          <span class="text-sm text-muted-foreground">
+            {{
+              t('exportToast.noExportsInQueue', {
+                filter: t('progressToast.filter.all')
+              })
+            }}
+          </span>
+        </div>
+      </div>
+    </template>
+
+    <template #footer="{ toggle }">
+      <div
+        class="flex h-12 min-w-0 flex-1 items-center justify-between gap-2 border-t border-border-default px-4"
+      >
+        <div class="flex min-w-0 flex-1 items-center gap-2 text-sm">
+          <Tooltip :disabled="isExpanded">
+            <TooltipTrigger as-child>
+              <i :class="cn('size-4 shrink-0', footerIconClass)" />
+            </TooltipTrigger>
+            <TooltipContent>{{ footerLabel }}</TooltipContent>
+          </Tooltip>
+          <span
+            :class="
+              cn(
+                'truncate overflow-hidden font-bold text-base-foreground transition-all duration-300',
+                isExpanded ? 'min-w-0 flex-1' : 'w-0'
+              )
+            "
+          >
+            {{ footerLabel }}
+          </span>
+        </div>
+
+        <div class="flex items-center gap-2">
+          <span
+            v-if="isInProgress"
+            :class="
+              cn(
+                'overflow-hidden text-sm text-muted-foreground transition-all duration-300',
+                isExpanded ? 'whitespace-nowrap' : 'w-0'
+              )
+            "
+          >
+            {{
+              t('progressToast.progressCount', {
+                completed: completedCount,
+                total: totalCount
+              })
+            }}
+          </span>
+
+          <div class="flex items-center">
+            <Button
+              variant="muted-textonly"
+              size="icon"
+              :aria-label="
+                isExpanded ? t('contextMenu.Collapse') : t('contextMenu.Expand')
+              "
+              @click.stop="toggle"
+            >
+              <i
+                :class="
+                  cn(
+                    'size-4',
+                    isExpanded
+                      ? 'icon-[lucide--chevron-down]'
+                      : 'icon-[lucide--chevron-up]'
+                  )
+                "
+              />
+            </Button>
+
+            <Button
+              v-if="!isInProgress"
+              variant="muted-textonly"
+              size="icon"
+              :aria-label="t('g.close')"
+              @click.stop="closeDialog"
+            >
+              <i class="icon-[lucide--x] size-4" />
+            </Button>
+          </div>
+        </div>
+      </div>
+    </template>
+  </ToastPanel>
+</template>

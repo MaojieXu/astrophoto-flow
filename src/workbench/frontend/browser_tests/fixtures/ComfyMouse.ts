@@ -1,0 +1,144 @@
+import type { Locator, Mouse } from '@playwright/test'
+
+import type { ComfyPage } from '@e2e/fixtures/ComfyPage'
+import type { Position } from '@e2e/fixtures/types'
+
+/**
+ * Used for drag and drop ops
+ * @see
+ * - {@link Mouse.down}
+ * - {@link Mouse.move}
+ * - {@link Mouse.up}
+ */
+interface DragOptions {
+  button?: 'left' | 'right' | 'middle'
+  clickCount?: number
+  steps?: number
+}
+
+/**
+ * Wraps mouse drag and drop to work with a canvas-based app.
+ *
+ * Requires the next frame animated before and after all steps, giving the
+ * canvas time to render the changes before screenshots are taken.
+ */
+export class ComfyMouse implements Omit<Mouse, 'move'> {
+  static defaultSteps = 5
+  static defaultOptions: DragOptions = { steps: ComfyMouse.defaultSteps }
+
+  readonly mouse: Mouse
+
+  constructor(readonly comfyPage: ComfyPage) {
+    this.mouse = comfyPage.page.mouse
+  }
+
+  async nextFrame() {
+    await this.comfyPage.nextFrame()
+  }
+
+  /** Drags from current location to a new location and hovers there (no pointerup event) */
+  async drag(to: Position, options = ComfyMouse.defaultOptions) {
+    const { steps, ...downOptions } = options
+
+    await this.mouse.down(downOptions)
+    await this.nextFrame()
+
+    await this.move(to, { steps })
+    await this.nextFrame()
+  }
+
+  async drop(options = ComfyMouse.defaultOptions) {
+    await this.mouse.up(options)
+    await this.nextFrame()
+  }
+
+  async dragAndDrop(
+    from: Position,
+    to: Position,
+    options = ComfyMouse.defaultOptions
+  ) {
+    const { steps } = options
+
+    await this.nextFrame()
+
+    await this.move(from, { steps })
+    await this.drag(to, options)
+    await this.drop(options)
+  }
+
+  async middleDrag(
+    from: Position,
+    to: Position,
+    options: Omit<DragOptions, 'button'> = {}
+  ) {
+    await this.dragAndDrop(from, to, { ...options, button: 'middle' })
+  }
+
+  async middleDragFromCenter(
+    locator: Locator,
+    delta: { x: number; y: number },
+    options: Omit<DragOptions, 'button'> = {}
+  ) {
+    await locator.waitFor({ state: 'visible' })
+    const box = await locator.boundingBox()
+    if (!box) throw new Error('middleDragFromCenter: bounding box not found')
+
+    const start = {
+      x: box.x + box.width / 2,
+      y: box.y + box.height / 2
+    }
+    await this.middleDrag(
+      start,
+      { x: start.x + delta.x, y: start.y + delta.y },
+      options
+    )
+  }
+
+  /** @see {@link Mouse.move} */
+  async move(to: Position, options = ComfyMouse.defaultOptions) {
+    await this.mouse.move(to.x, to.y, options)
+    await this.nextFrame()
+  }
+
+  async dragElementBy(element: Locator, { x, y }: { x?: number; y?: number }) {
+    const elementBox = await element.boundingBox()
+    if (!elementBox) throw new Error('element should have layout')
+
+    const cx = elementBox.x + elementBox.width / 2
+    const cy = elementBox.y + elementBox.height / 2
+
+    await this.dragAndDrop(
+      { x: cx, y: cy },
+      { x: cx + (x ?? 0), y: cy + (y ?? 0) }
+    )
+  }
+
+  async hold(...args: Parameters<Mouse['down']>) {
+    await this.mouse.down(...args)
+    const release = new AsyncDisposableStack()
+    release.defer(() => this.mouse.up(...args))
+    return release
+  }
+
+  //#region Pass-through
+  async click(...args: Parameters<Mouse['click']>) {
+    return await this.mouse.click(...args)
+  }
+
+  async dblclick(...args: Parameters<Mouse['dblclick']>) {
+    return await this.mouse.dblclick(...args)
+  }
+
+  async down(...args: Parameters<Mouse['down']>) {
+    return await this.mouse.down(...args)
+  }
+
+  async up(...args: Parameters<Mouse['up']>) {
+    return await this.mouse.up(...args)
+  }
+
+  async wheel(...args: Parameters<Mouse['wheel']>) {
+    return await this.mouse.wheel(...args)
+  }
+  //#endregion Pass-through
+}

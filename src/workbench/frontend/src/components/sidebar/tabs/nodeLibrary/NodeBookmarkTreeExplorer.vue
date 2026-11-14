@@ -1,0 +1,312 @@
+<template>
+  <TreeExplorer
+    ref="treeExplorerRef"
+    v-model:expanded-keys="expandedKeys"
+    class="node-lib-bookmark-tree-explorer"
+    data-testid="node-library-bookmark-tree"
+    :root="renderedBookmarkedRoot"
+  >
+    <template #node="{ node }">
+      <TreeExplorerTreeNode :node>
+        <template #before-label>
+          <Badge v-if="node.data?.experimental" severity="primary">
+            {{ $t('g.experimental') }}
+          </Badge>
+          <Badge v-if="node.data?.deprecated" severity="danger">
+            {{ $t('g.deprecated') }}
+          </Badge>
+        </template>
+        <template v-if="node.data" #actions>
+          <template v-if="subgraphStore.isUserBlueprint(node.data.name)">
+            <Button
+              variant="destructive"
+              size="icon-sm"
+              :aria-label="$t('g.delete')"
+              @click.stop="void subgraphStore.deleteBlueprint(node.data.name)"
+            >
+              <i class="icon-[lucide--trash-2] size-4" />
+            </Button>
+            <Button
+              variant="muted-textonly"
+              size="icon-sm"
+              :aria-label="$t('g.edit')"
+              @click.stop="void subgraphStore.editBlueprint(node.data.name)"
+            >
+              <i class="icon-[lucide--square-pen] size-4" />
+            </Button>
+          </template>
+          <template v-else>
+            <Button
+              variant="muted-textonly"
+              size="icon-sm"
+              :aria-label="$t('icon.bookmark')"
+              @click.stop="void nodeBookmarkStore.toggleBookmark(node.data)"
+            >
+              <i
+                :class="
+                  cn(
+                    nodeBookmarkStore.isBookmarked(node.data)
+                      ? 'pi pi-bookmark-fill'
+                      : 'pi pi-bookmark',
+                    'size-3.5'
+                  )
+                "
+              />
+            </Button>
+            <Button
+              :tooltip="$t('g.learnMore')"
+              tooltip-side="bottom"
+              variant="muted-textonly"
+              size="icon-sm"
+              :aria-label="$t('g.learnMore')"
+              @click.stop="openNodeHelp(node.data)"
+            >
+              <i class="pi pi-question size-3.5" />
+            </Button>
+          </template>
+        </template>
+      </TreeExplorerTreeNode>
+    </template>
+    <template #preview="{ node }">
+      <NodePreview v-if="node.data" :node-def="node.data" />
+    </template>
+  </TreeExplorer>
+
+  <FolderCustomizationDialog
+    v-model="showCustomizationDialog"
+    :initial-icon="initialIcon"
+    :initial-color="initialColor"
+    @confirm="updateCustomization"
+  />
+</template>
+
+<script setup lang="ts">
+import { computed, getCurrentInstance, nextTick, ref, watch } from 'vue'
+import { useI18n } from 'vue-i18n'
+
+import FolderCustomizationDialog from '@/components/common/CustomizationDialog.vue'
+import TreeExplorer from '@/components/common/TreeExplorer.vue'
+import TreeExplorerTreeNode from '@/components/common/TreeExplorerTreeNode.vue'
+import NodePreview from '@/components/node/NodePreview.vue'
+import { renderNodePreview } from '@/components/node/renderNodePreview'
+import Badge from '@/components/ui/badge/Badge.vue'
+import Button from '@/components/ui/button/Button.vue'
+import { useTreeExpansion } from '@/composables/useTreeExpansion'
+import { withNodeAddSource } from '@/platform/telemetry/nodeAdded/nodeAddSource'
+import { useLitegraphService } from '@/services/litegraphService'
+import { useNodeBookmarkStore } from '@/stores/nodeBookmarkStore'
+import type { ComfyNodeDefImpl } from '@/stores/nodeDefStore'
+import { useSubgraphStore } from '@/stores/subgraphStore'
+import type {
+  RenderedTreeExplorerNode,
+  TreeExplorerDragAndDropData,
+  TreeExplorerNode,
+  TreeNode
+} from '@/types/treeExplorerTypes'
+import { cn } from '@comfyorg/tailwind-utils'
+
+const instance = getCurrentInstance()!
+const appContext = instance.appContext
+const { filteredNodeDefs, openNodeHelp } = defineProps<{
+  filteredNodeDefs: ComfyNodeDefImpl[]
+  openNodeHelp: (nodeDef: ComfyNodeDefImpl) => void
+}>()
+
+const expandedKeys = ref<Record<string, boolean>>({})
+const { expandNode, toggleNodeOnEvent } = useTreeExpansion(expandedKeys)
+
+const nodeBookmarkStore = useNodeBookmarkStore()
+const subgraphStore = useSubgraphStore()
+const bookmarkedRoot = computed<TreeNode<ComfyNodeDefImpl>>(() => {
+  const filterTree = (
+    node: TreeNode<ComfyNodeDefImpl>
+  ): TreeNode<ComfyNodeDefImpl> | null => {
+    if (node.leaf) {
+      if (!node.data) return null
+      const nodeData = node.data
+      // Check if the node's display_name is in the filteredNodeDefs list
+      return filteredNodeDefs.some((def) => def.name === nodeData.name)
+        ? node
+        : null
+    }
+
+    const filteredChildren = node.children
+      ?.map(filterTree)
+      .filter((child): child is TreeNode<ComfyNodeDefImpl> => child !== null)
+
+    if (filteredChildren && filteredChildren.length > 0) {
+      return {
+        ...node,
+        children: filteredChildren
+      }
+    }
+
+    return null // Remove empty folders
+  }
+
+  return filteredNodeDefs.length
+    ? filterTree(nodeBookmarkStore.bookmarkedRoot) || {
+        key: 'root',
+        label: 'Root',
+        children: []
+      }
+    : nodeBookmarkStore.bookmarkedRoot
+})
+watch(
+  () => filteredNodeDefs,
+  async (newValue) => {
+    if (newValue.length) {
+      await nextTick()
+      expandNode(bookmarkedRoot.value)
+    }
+  }
+)
+
+const { t } = useI18n()
+const extraMenuItems = (
+  menuTargetNode: RenderedTreeExplorerNode<ComfyNodeDefImpl>
+) => [
+  {
+    label: t('g.customize'),
+    icon: 'pi pi-palette',
+    command: () => {
+      if (!menuTargetNode.data) return
+
+      const customization =
+        nodeBookmarkStore.bookmarksCustomization[menuTargetNode.data.nodePath]
+      initialIcon.value =
+        customization?.icon || nodeBookmarkStore.defaultBookmarkIcon
+      initialColor.value =
+        customization?.color || nodeBookmarkStore.defaultBookmarkColor
+
+      showCustomizationDialog.value = true
+      customizationTargetNodePath.value = menuTargetNode.data.nodePath
+    },
+    visible: !menuTargetNode?.leaf
+  }
+]
+
+function getCustomization(node: TreeNode<ComfyNodeDefImpl>) {
+  return node.data
+    ? nodeBookmarkStore.bookmarksCustomization[node.data.nodePath]
+    : undefined
+}
+
+const renderedBookmarkedRoot = computed<TreeExplorerNode<ComfyNodeDefImpl>>(
+  () => {
+    const fillNodeInfo = (
+      node: TreeNode<ComfyNodeDefImpl>
+    ): TreeExplorerNode<ComfyNodeDefImpl> => {
+      const children = node.children?.map(fillNodeInfo)
+
+      // Sort children: non-leaf nodes first, then leaf nodes, both alphabetically
+      const sortedChildren = children?.sort((a, b) => {
+        if (a.leaf === b.leaf) {
+          return a.label.localeCompare(b.label)
+        }
+        return a.leaf ? 1 : -1
+      })
+
+      return {
+        key: node.key,
+        label: node.leaf ? (node.data?.display_name ?? node.label) : node.label,
+        leaf: node.leaf,
+        data: node.data,
+        getIcon() {
+          if (this.leaf) {
+            return 'pi pi-circle-fill'
+          }
+          const customization = getCustomization(node)
+          return customization?.icon
+            ? 'pi ' + customization.icon
+            : 'pi pi-bookmark-fill'
+        },
+        getIconColor() {
+          return this.leaf ? undefined : getCustomization(node)?.color
+        },
+        children: sortedChildren,
+        draggable: node.leaf,
+        async handleAddFolder(newName: string) {
+          if (newName !== '') {
+            await nodeBookmarkStore.addNewBookmarkFolder(this.data, newName)
+          }
+        },
+        renderDragPreview(container) {
+          if (!node.data) return
+          return renderNodePreview(container, node.data, appContext)
+        },
+        droppable: !node.leaf,
+        async handleDrop(data: TreeExplorerDragAndDropData<ComfyNodeDefImpl>) {
+          const folderNodeDef = node.data
+          const nodeDefToAdd = data.data.data
+          if (!folderNodeDef || !nodeDefToAdd) return
+          // Remove bookmark if the source is the top level bookmarked node.
+          if (nodeBookmarkStore.isBookmarked(nodeDefToAdd)) {
+            await nodeBookmarkStore.toggleBookmark(nodeDefToAdd)
+          }
+          const nodePath = folderNodeDef.category + '/' + nodeDefToAdd.name
+          await nodeBookmarkStore.addBookmark(nodePath)
+        },
+        handleClick(e: MouseEvent) {
+          const nodeDef = this.data
+          if (this.leaf && nodeDef) {
+            withNodeAddSource('sidebar_drag', () =>
+              useLitegraphService().addNodeOnGraph(nodeDef)
+            )
+          } else {
+            toggleNodeOnEvent(e, node)
+          }
+        },
+        contextMenuItems: extraMenuItems,
+        ...(node.leaf
+          ? node.data && subgraphStore.isUserBlueprint(node.data.name)
+            ? {
+                async handleDelete() {
+                  if (this.data) {
+                    await subgraphStore.deleteBlueprint(this.data.name)
+                  }
+                }
+              }
+            : {}
+          : {
+              async handleRename(newName: string) {
+                if (this.data && this.data.isDummyFolder) {
+                  await nodeBookmarkStore.renameBookmarkFolder(
+                    this.data,
+                    newName
+                  )
+                }
+              },
+              async handleDelete() {
+                if (!this.data) return
+                await nodeBookmarkStore.deleteBookmarkFolder(this.data)
+              }
+            })
+      }
+    }
+    return fillNodeInfo(bookmarkedRoot.value)
+  }
+)
+
+interface TreeExplorerExposed {
+  addFolderCommand: (targetNodeKey: string) => void
+}
+
+const treeExplorerRef = ref<TreeExplorerExposed | null>(null)
+defineExpose({
+  addNewBookmarkFolder: () => treeExplorerRef.value?.addFolderCommand('root')
+})
+
+const showCustomizationDialog = ref(false)
+const initialIcon = ref(nodeBookmarkStore.defaultBookmarkIcon)
+const initialColor = ref(nodeBookmarkStore.defaultBookmarkColor)
+const customizationTargetNodePath = ref('')
+const updateCustomization = async (icon: string, color: string) => {
+  if (customizationTargetNodePath.value) {
+    await nodeBookmarkStore.updateBookmarkCustomization(
+      customizationTargetNodePath.value,
+      { icon, color }
+    )
+  }
+}
+</script>

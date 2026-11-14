@@ -1,0 +1,37 @@
+# Bilingual-pair consistency record for .agents/notes/proposed/architecture/2026-11-14-node-mcp-for-the-tool-surface.md ↔ .agents/notes/proposed/architecture/2026-11-14-node-mcp-for-the-tool-surface.zh.md: per heading
+# section, a hash of its English and Chinese blocks outside code blocks and generated regions.
+# After editing either side, bring the other along and re-record with:
+#   pnpm run verify-translation-pairing --write .agents/notes/proposed/architecture/2026-11-14-node-mcp-for-the-tool-surface.md
+/agent-note-the-mcp-surface-is-a-task-client-not-a-second-backend:
+  en: 173a1cfad2bcbd6a
+  zh: 13cf39565dcfa8f1
+/agent-note-the-mcp-surface-is-a-task-client-not-a-second-backend/problem:
+  en: 0b420980f40fd14b
+  zh: 8bd4112fd177823f
+/agent-note-the-mcp-surface-is-a-task-client-not-a-second-backend/proposal:
+  en: 53986c38829998cd
+  zh: c9146a1087348949
+/agent-note-the-mcp-surface-is-a-task-client-not-a-second-backend/proposal/runtime-and-transport:
+  en: 4a6b54c6bc9accaa
+  zh: 2cecdb438a842d4c
+/agent-note-the-mcp-surface-is-a-task-client-not-a-second-backend/proposal/tools:
+  en: 781e41fd72d476f3
+  zh: 00f05fb8e305ba96
+/agent-note-the-mcp-surface-is-a-task-client-not-a-second-backend/proposal/contract-and-errors:
+  en: 8bc1c52ede0c9ef8
+  zh: 7f192bf6e2e82963
+/agent-note-the-mcp-surface-is-a-task-client-not-a-second-backend/proposal/what-stays-local:
+  en: 506f1fafb0bc09e3
+  zh: 1cdd6ecbdf5f1c65
+/agent-note-the-mcp-surface-is-a-task-client-not-a-second-backend/proposal/cli:
+  en: 4ebfbbdee1311b9c
+  zh: 4b23330d232ab46f
+/agent-note-the-mcp-surface-is-a-task-client-not-a-second-backend/alternatives-considered:
+  en: c7fdfd49766590c6
+  zh: a66b5113ea9595f0
+/agent-note-the-mcp-surface-is-a-task-client-not-a-second-backend/acceptance-criteria:
+  en: 59a831dc8e5e5f3a
+  zh: 3a1e0263cba0823d
+/agent-note-the-mcp-surface-is-a-task-client-not-a-second-backend/risks:
+  en: d788e736a0362817
+  zh: a89a310b51589aba

@@ -1,0 +1,354 @@
+import { useReleaseStore } from '../common/releaseStore'
+beforeEach(() => {
+  Object.assign(useReleaseStore(), {
+    recentRelease: null as ReleaseNote | null
+  })
+  Object.assign(useReleaseStore(), { shouldShowToast: false })
+  vi.mocked(useReleaseStore().handleSkipRelease).mockResolvedValue(undefined)
+  vi.mocked(useReleaseStore().handleShowChangelog).mockResolvedValue(undefined)
+  Object.assign(useReleaseStore(), { releases: [] })
+  vi.mocked(useReleaseStore().fetchReleases).mockResolvedValue(undefined)
+})
+import { useCommandStore } from '@/stores/commandStore'
+import { render, screen } from '@testing-library/vue'
+import userEvent from '@testing-library/user-event'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { nextTick } from 'vue'
+import { createI18n } from 'vue-i18n'
+
+import enMessages from '@/locales/en/main.json' with { type: 'json' }
+import { useErrorHandling } from '@/composables/useErrorHandling'
+
+import type { ReleaseNote } from '../common/releaseService'
+import ReleaseNotificationToast from './ReleaseNotificationToast.vue'
+
+vi.hoisted(() => {
+  globalThis.ResizeObserver = class {
+    observe() {}
+    unobserve() {}
+    disconnect() {}
+  }
+})
+
+const mockData = vi.hoisted(() => ({ isDesktop: false }))
+
+vi.mock(import('@/platform/distribution/types'), () => ({
+  isCloud: false,
+  isNightly: false,
+  get isDesktop() {
+    return mockData.isDesktop
+  }
+}))
+
+const i18n = createI18n({
+  legacy: false,
+  locale: 'en',
+  messages: { en: enMessages }
+})
+
+vi.mock(import('@/utils/formatUtil'), () => ({
+  formatVersionAnchor: vi.fn((version: string) => version.replace(/\./g, ''))
+}))
+
+vi.mock(import('@/utils/markdownRendererUtil'), () => ({
+  renderMarkdownToHtml: vi.fn((content: string) => `<div>${content}</div>`)
+}))
+
+vi.mock(import('@/composables/useErrorHandling'))
+
+// Mock release store
+
+beforeEach(() => {
+  vi.mocked(useCommandStore().execute).mockResolvedValue(undefined)
+})
+
+describe('ReleaseNotificationToast', () => {
+  const renderComponent = (props = {}) => {
+    return render(ReleaseNotificationToast, {
+      global: {
+        plugins: [i18n],
+        stubs: {
+          'i-lucide-rocket': true,
+          'i-lucide-external-link': true
+        }
+      },
+      props
+    })
+  }
+
+  beforeEach(() => {
+    mockData.isDesktop = false
+    Object.assign(useReleaseStore(), { recentRelease: null })
+    Object.assign(useReleaseStore(), { shouldShowToast: true })
+  })
+
+  it('displays rocket icon', () => {
+    Object.assign(useReleaseStore(), {
+      recentRelease: {
+        version: '1.2.3',
+        content: '# Test Release'
+      } as ReleaseNote
+    })
+
+    const { container } = renderComponent()
+    /* oxlint-disable testing-library/no-container, testing-library/no-node-access */
+    expect(
+      container.querySelector('.icon-\\[lucide--rocket\\]')
+    ).toBeInTheDocument()
+    /* oxlint-enable testing-library/no-container, testing-library/no-node-access */
+  })
+
+  it('displays release version', () => {
+    Object.assign(useReleaseStore(), {
+      recentRelease: {
+        version: '1.2.3',
+        content: '# Test Release'
+      } as ReleaseNote
+    })
+
+    renderComponent()
+    expect(screen.getByText('1.2.3')).toBeInTheDocument()
+  })
+
+  it('calls handleSkipRelease when skip button is clicked', async () => {
+    Object.assign(useReleaseStore(), {
+      recentRelease: {
+        version: '1.2.3',
+        content: '# Test Release'
+      } as ReleaseNote
+    })
+
+    renderComponent()
+    const user = userEvent.setup()
+
+    await user.click(screen.getByRole('button', { name: /skip/i }))
+
+    expect(useReleaseStore().handleSkipRelease).toHaveBeenCalledWith('1.2.3')
+  })
+
+  it('opens update URL when update button is clicked', async () => {
+    Object.assign(useReleaseStore(), {
+      recentRelease: {
+        version: '1.2.3',
+        content: '# Test Release'
+      } as ReleaseNote
+    })
+
+    const mockWindowOpen = vi.fn()
+    Object.defineProperty(window, 'open', {
+      value: mockWindowOpen,
+      writable: true
+    })
+
+    renderComponent()
+    const user = userEvent.setup()
+
+    await user.click(screen.getByRole('button', { name: /update/i }))
+
+    expect(mockWindowOpen).toHaveBeenCalledWith(
+      'https://docs.comfy.org/installation/update_comfyui',
+      '_blank'
+    )
+  })
+
+  it('executes desktop updater flow when running on desktop', async () => {
+    mockData.isDesktop = true
+    Object.assign(useReleaseStore(), {
+      recentRelease: {
+        version: '1.2.3',
+        content: '# Test Release'
+      } as ReleaseNote
+    })
+
+    vi.mocked(useCommandStore().execute).mockResolvedValueOnce(undefined)
+
+    const mockWindowOpen = vi.fn()
+    Object.defineProperty(window, 'open', {
+      value: mockWindowOpen,
+      writable: true
+    })
+
+    renderComponent()
+    const user = userEvent.setup()
+
+    await user.click(screen.getByRole('button', { name: /update/i }))
+
+    expect(useCommandStore().execute).toHaveBeenCalledWith(
+      'Comfy-Desktop.CheckForUpdates'
+    )
+    expect(mockWindowOpen).not.toHaveBeenCalled()
+    expect(useErrorHandling().toastErrorHandler).not.toHaveBeenCalled()
+  })
+
+  it('shows an error toast if the desktop updater flow fails on desktop', async () => {
+    mockData.isDesktop = true
+    Object.assign(useReleaseStore(), {
+      recentRelease: {
+        version: '1.2.3',
+        content: '# Test Release'
+      } as ReleaseNote
+    })
+
+    const error = new Error('Command Comfy-Desktop.CheckForUpdates not found')
+    vi.mocked(useCommandStore().execute).mockRejectedValueOnce(error)
+
+    const mockWindowOpen = vi.fn()
+    Object.defineProperty(window, 'open', {
+      value: mockWindowOpen,
+      writable: true
+    })
+
+    renderComponent()
+    const user = userEvent.setup()
+
+    await user.click(screen.getByRole('button', { name: /update/i }))
+
+    expect(useErrorHandling().toastErrorHandler).toHaveBeenCalledWith(error)
+    expect(mockWindowOpen).not.toHaveBeenCalled()
+  })
+
+  it('calls handleShowChangelog when learn more link is clicked', async () => {
+    Object.assign(useReleaseStore(), {
+      recentRelease: {
+        version: '1.2.3',
+        content: '# Test Release'
+      } as ReleaseNote
+    })
+
+    renderComponent()
+    const user = userEvent.setup()
+
+    await user.click(screen.getByRole('link', { name: /what's new/i }))
+
+    expect(useReleaseStore().handleShowChangelog).toHaveBeenCalledWith('1.2.3')
+  })
+
+  it('generates correct changelog URL', () => {
+    Object.assign(useReleaseStore(), {
+      recentRelease: {
+        version: '1.2.3',
+        content: '# Test Release'
+      } as ReleaseNote
+    })
+
+    renderComponent()
+
+    const learnMoreLink = screen.getByRole('link', { name: /what's new/i })
+    expect(learnMoreLink).toHaveAttribute(
+      'href',
+      expect.stringContaining('docs.comfy.org/changelog')
+    )
+  })
+
+  it('removes title from markdown content for toast display', async () => {
+    const mockMarkdownRendererModule = (await vi.importMock(
+      '@/utils/markdownRendererUtil'
+    )) as { renderMarkdownToHtml: ReturnType<typeof vi.fn> }
+    const mockMarkdownRenderer = vi.mocked(
+      mockMarkdownRendererModule.renderMarkdownToHtml
+    )
+    mockMarkdownRenderer.mockReturnValue('<div>Content without title</div>')
+
+    Object.assign(useReleaseStore(), {
+      recentRelease: {
+        version: '1.2.3',
+        content: '# Test Release Title\n\nSome content'
+      } as ReleaseNote
+    })
+
+    renderComponent()
+
+    expect(mockMarkdownRenderer).toHaveBeenCalledWith('\n\nSome content')
+  })
+
+  it('fetches releases on mount when not already loaded', () => {
+    useReleaseStore().releases = []
+
+    renderComponent()
+
+    expect(useReleaseStore().fetchReleases).toHaveBeenCalled()
+  })
+
+  it('handles missing release content gracefully', () => {
+    Object.assign(useReleaseStore(), { shouldShowToast: true })
+    Object.assign(useReleaseStore(), {
+      recentRelease: {
+        version: '1.2.3',
+        content: ''
+      } as ReleaseNote
+    })
+
+    renderComponent()
+
+    expect(screen.getByText(/Check out the latest/)).toBeInTheDocument()
+  })
+
+  it('auto-hides after timeout', async () => {
+    Object.assign(useReleaseStore(), {
+      recentRelease: {
+        version: '1.2.3',
+        content: '# Test Release'
+      } as ReleaseNote
+    })
+
+    renderComponent()
+
+    expect(screen.getByText('New update is out!')).toBeInTheDocument()
+
+    vi.advanceTimersByTime(8000)
+    await nextTick()
+
+    expect(vi.getTimerCount()).toBe(0)
+  })
+
+  it('restarts auto-hide after being hidden longer than the timeout', async () => {
+    Object.assign(useReleaseStore(), {
+      recentRelease: {
+        version: '1.2.3',
+        content: '# Test Release'
+      } as ReleaseNote,
+      shouldShowToast: false
+    })
+
+    const { rerender } = renderComponent({ isVisible: true })
+
+    Object.assign(useReleaseStore(), { shouldShowToast: true })
+    await nextTick()
+    expect(screen.getByText('New update is out!')).toBeInTheDocument()
+
+    await rerender({ isVisible: false })
+    expect(screen.queryByText('New update is out!')).not.toBeInTheDocument()
+
+    vi.advanceTimersByTime(8000)
+    await rerender({ isVisible: true })
+    expect(screen.getByText('New update is out!')).toBeInTheDocument()
+
+    vi.advanceTimersByTime(7999)
+    await nextTick()
+    expect(screen.getByText('New update is out!')).toBeInTheDocument()
+
+    vi.advanceTimersByTime(1)
+    await nextTick()
+    expect(screen.queryByText('New update is out!')).not.toBeInTheDocument()
+  })
+
+  it('clears auto-hide timer when manually dismissed', async () => {
+    Object.assign(useReleaseStore(), {
+      recentRelease: {
+        version: '1.2.3',
+        content: '# Test Release'
+      } as ReleaseNote
+    })
+
+    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime })
+
+    renderComponent()
+
+    vi.advanceTimersByTime(1000)
+
+    await user.click(screen.getByRole('button', { name: /skip/i }))
+
+    expect(vi.getTimerCount()).toBe(0)
+    expect(useReleaseStore().handleSkipRelease).toHaveBeenCalled()
+  })
+})

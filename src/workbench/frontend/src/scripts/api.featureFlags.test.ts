@@ -1,0 +1,561 @@
+import type { Mock } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { computed, nextTick } from 'vue'
+
+import { api, ComfyApi } from '@/scripts/api'
+
+interface MockWebSocket {
+  readyState: number
+  send: Mock
+  close: Mock
+  addEventListener: Mock
+  removeEventListener: Mock
+}
+
+describe('API Feature Flags', () => {
+  let mockWebSocket: MockWebSocket
+  let webSocketConstructor: Mock
+  const wsEventHandlers: { [key: string]: (event: unknown) => void } = {}
+
+  beforeEach(() => {
+    // Mock WebSocket
+    mockWebSocket = {
+      readyState: 1, // WebSocket.OPEN
+      send: vi.fn(),
+      close: vi.fn(),
+      addEventListener: vi.fn(
+        (event: string, handler: (event: unknown) => void) => {
+          wsEventHandlers[event] = handler
+        }
+      ),
+      removeEventListener: vi.fn()
+    }
+
+    // Mock WebSocket constructor
+    webSocketConstructor = vi.fn(function (this: WebSocket) {
+      Object.assign(this, mockWebSocket)
+    })
+    vi.stubGlobal('WebSocket', webSocketConstructor)
+
+    // Reset API state
+    api.socket = null
+    api.serverFeatureFlags.value = {}
+    api.serverFeatureFlagsSettled.value = false
+
+    // Mock getClientFeatureFlags to return test feature flags
+    vi.spyOn(api, 'getClientFeatureFlags').mockReturnValue({
+      supports_preview_metadata: true,
+      api_version: '1.0.0',
+      capabilities: ['bulk_operations', 'async_nodes']
+    })
+  })
+
+  describe('Feature flags negotiation', () => {
+    it('marks feature flags stale without clearing them when resetting the socket identity', async () => {
+      const resettingApi = new ComfyApi()
+      resettingApi.serverFeatureFlags.value = { account_a_feature: true }
+      resettingApi.serverFeatureFlagsSettled.value = true
+
+      const resetPromise = resettingApi.resetSocket()
+
+      expect(resettingApi.serverFeatureFlags.value).toEqual({
+        account_a_feature: true
+      })
+      expect(resettingApi.serverFeatureFlagsSettled.value).toBe(false)
+      await resetPromise
+    })
+
+    it('should send client feature flags as first message on connection', async () => {
+      // Initialize API connection
+      const initPromise = api.init()
+
+      // Simulate connection open
+      wsEventHandlers['open'](new Event('open'))
+
+      // Check that feature flags were sent as first message
+      expect(mockWebSocket.send).toHaveBeenCalledTimes(1)
+      const sentMessage = JSON.parse(mockWebSocket.send.mock.calls[0][0])
+      expect(sentMessage).toEqual({
+        type: 'feature_flags',
+        data: {
+          supports_preview_metadata: true,
+          api_version: '1.0.0',
+          capabilities: ['bulk_operations', 'async_nodes']
+        }
+      })
+
+      // Simulate server response with status message
+      wsEventHandlers['message']({
+        data: JSON.stringify({
+          type: 'status',
+          data: {
+            status: { exec_info: { queue_remaining: 0 } },
+            sid: 'test-sid'
+          }
+        })
+      })
+
+      // Simulate server feature flags response
+      wsEventHandlers['message']({
+        data: JSON.stringify({
+          type: 'feature_flags',
+          data: {
+            supports_preview_metadata: true,
+            async_execution: true,
+            supported_formats: ['webp', 'jpeg', 'png'],
+            api_version: '1.0.0',
+            max_upload_size: 104857600,
+            capabilities: ['isolated_nodes', 'dynamic_models']
+          }
+        })
+      })
+
+      await initPromise
+
+      // Check that server features were stored
+      expect(api.serverFeatureFlags.value).toEqual({
+        supports_preview_metadata: true,
+        async_execution: true,
+        supported_formats: ['webp', 'jpeg', 'png'],
+        api_version: '1.0.0',
+        max_upload_size: 104857600,
+        capabilities: ['isolated_nodes', 'dynamic_models']
+      })
+      expect(api.serverFeatureFlagsSettled.value).toBe(true)
+    })
+
+    it('settles feature flags immediately when the server delivers an empty map', () => {
+      void api.init()
+
+      wsEventHandlers['message']({
+        data: JSON.stringify({
+          type: 'feature_flags',
+          data: {}
+        })
+      })
+
+      expect(api.serverFeatureFlags.value).toEqual({})
+      expect(api.serverFeatureFlagsSettled.value).toBe(true)
+    })
+
+    it('should handle server without feature flags support', async () => {
+      // Initialize API connection
+      const initPromise = api.init()
+
+      // Simulate connection open
+      wsEventHandlers['open'](new Event('open'))
+
+      // Clear the send mock to reset
+      mockWebSocket.send.mockClear()
+
+      // Simulate server response with status but no feature flags
+      wsEventHandlers['message']({
+        data: JSON.stringify({
+          type: 'status',
+          data: {
+            status: { exec_info: { queue_remaining: 0 } },
+            sid: 'test-sid'
+          }
+        })
+      })
+
+      // Simulate some other message (not feature flags)
+      wsEventHandlers['message']({
+        data: JSON.stringify({
+          type: 'execution_start',
+          data: {}
+        })
+      })
+
+      await initPromise
+
+      await vi.advanceTimersByTimeAsync(5_000)
+
+      // Server features should remain empty
+      expect(api.serverFeatureFlags.value).toEqual({})
+      expect(api.serverFeatureFlagsSettled.value).toBe(true)
+    })
+
+    it('settles feature flags when the socket closes before opening', () => {
+      void api.init()
+
+      wsEventHandlers['error'](new Event('error'))
+      wsEventHandlers['close'](new Event('close'))
+
+      expect(mockWebSocket.close).toHaveBeenCalledOnce()
+      expect(api.serverFeatureFlagsSettled.value).toBe(true)
+    })
+
+    it('resets feature flag settlement for each replacement socket', async () => {
+      void api.init()
+
+      for (let attempt = 0; attempt < 3; attempt++) {
+        wsEventHandlers['open'](new Event('open'))
+        await vi.advanceTimersByTimeAsync(1_000)
+        wsEventHandlers['close'](new Event('close'))
+        expect(api.serverFeatureFlagsSettled.value).toBe(true)
+        await vi.advanceTimersByTimeAsync(300)
+        expect(api.serverFeatureFlagsSettled.value).toBe(false)
+      }
+
+      expect(api.serverFeatureFlags.value).toEqual({})
+      expect(webSocketConstructor).toHaveBeenCalledTimes(4)
+    })
+  })
+
+  describe('Feature checking methods', () => {
+    beforeEach(() => {
+      // Set up some test features
+      api.serverFeatureFlags.value = {
+        supports_preview_metadata: true,
+        async_execution: false,
+        capabilities: ['isolated_nodes', 'dynamic_models']
+      }
+    })
+
+    it('should check if server supports a boolean feature', () => {
+      expect(api.serverSupportsFeature('supports_preview_metadata')).toBe(true)
+      expect(api.serverSupportsFeature('async_execution')).toBe(false)
+      expect(api.serverSupportsFeature('non_existent_feature')).toBe(false)
+    })
+
+    it('should get server feature value', () => {
+      expect(api.getServerFeature('supports_preview_metadata')).toBe(true)
+      expect(api.getServerFeature('capabilities')).toEqual([
+        'isolated_nodes',
+        'dynamic_models'
+      ])
+      expect(api.getServerFeature('non_existent_feature')).toBeUndefined()
+    })
+  })
+
+  describe('Client feature flags configuration', () => {
+    it('should use mocked client feature flags', () => {
+      // Verify mocked flags are returned
+      const clientFlags = api.getClientFeatureFlags()
+      expect(clientFlags).toEqual({
+        supports_preview_metadata: true,
+        api_version: '1.0.0',
+        capabilities: ['bulk_operations', 'async_nodes']
+      })
+    })
+
+    it('should return a copy of client feature flags', () => {
+      // Temporarily restore the real implementation for this test
+      vi.mocked(api.getClientFeatureFlags).mockRestore()
+
+      // Verify that modifications to returned object don't affect original
+      const clientFlags1 = api.getClientFeatureFlags()
+      const clientFlags2 = api.getClientFeatureFlags()
+
+      // Should be different objects
+      expect(clientFlags1).not.toBe(clientFlags2)
+
+      // But with same content
+      expect(clientFlags1).toEqual(clientFlags2)
+
+      // Modifying one should not affect the other
+      clientFlags1.test_flag = true
+      expect(api.getClientFeatureFlags()).not.toHaveProperty('test_flag')
+    })
+  })
+
+  describe('Integration with preview messages', () => {
+    it('should affect preview message handling based on feature support', () => {
+      // Test with metadata support
+      api.serverFeatureFlags.value = { supports_preview_metadata: true }
+      expect(api.serverSupportsFeature('supports_preview_metadata')).toBe(true)
+
+      // Test without metadata support
+      api.serverFeatureFlags.value = {}
+      expect(api.serverSupportsFeature('supports_preview_metadata')).toBe(false)
+    })
+  })
+
+  describe('Reactivity', () => {
+    it('should trigger computed updates when serverFeatureFlags changes', async () => {
+      api.serverFeatureFlags.value = {}
+
+      const flag = computed(() =>
+        api.getServerFeature('supports_preview_metadata', false)
+      )
+      expect(flag.value).toBe(false)
+
+      api.serverFeatureFlags.value = { supports_preview_metadata: true }
+      await nextTick()
+
+      expect(flag.value).toBe(true)
+    })
+  })
+
+  describe('progress_text binary message parsing', () => {
+    /**
+     * Build a legacy progress_text binary message:
+     * [4B event_type=3][4B node_id_len][node_id_bytes][text_bytes]
+     */
+    function buildLegacyProgressText(
+      nodeId: string,
+      text: string
+    ): ArrayBuffer {
+      const encoder = new TextEncoder()
+      const nodeIdBytes = encoder.encode(nodeId)
+      const textBytes = encoder.encode(text)
+      const buf = new ArrayBuffer(4 + 4 + nodeIdBytes.length + textBytes.length)
+      const view = new DataView(buf)
+      view.setUint32(0, 3) // event type
+      view.setUint32(4, nodeIdBytes.length)
+      new Uint8Array(buf, 8, nodeIdBytes.length).set(nodeIdBytes)
+      new Uint8Array(buf, 8 + nodeIdBytes.length, textBytes.length).set(
+        textBytes
+      )
+      return buf
+    }
+
+    /**
+     * Build a new-format progress_text binary message:
+     * [4B event_type=3][4B prompt_id_len][prompt_id_bytes][4B node_id_len][node_id_bytes][text_bytes]
+     */
+    function buildNewProgressText(
+      promptId: string,
+      nodeId: string,
+      text: string
+    ): ArrayBuffer {
+      const encoder = new TextEncoder()
+      const promptIdBytes = encoder.encode(promptId)
+      const nodeIdBytes = encoder.encode(nodeId)
+      const textBytes = encoder.encode(text)
+      const buf = new ArrayBuffer(
+        4 + 4 + promptIdBytes.length + 4 + nodeIdBytes.length + textBytes.length
+      )
+      const view = new DataView(buf)
+      let offset = 0
+      view.setUint32(offset, 3) // event type
+      offset += 4
+      view.setUint32(offset, promptIdBytes.length)
+      offset += 4
+      new Uint8Array(buf, offset, promptIdBytes.length).set(promptIdBytes)
+      offset += promptIdBytes.length
+      view.setUint32(offset, nodeIdBytes.length)
+      offset += 4
+      new Uint8Array(buf, offset, nodeIdBytes.length).set(nodeIdBytes)
+      offset += nodeIdBytes.length
+      new Uint8Array(buf, offset, textBytes.length).set(textBytes)
+      return buf
+    }
+
+    let dispatchedEvents: { nodeId: string; text: string; prompt_id?: string }[]
+    let listener: EventListener
+
+    beforeEach(async () => {
+      dispatchedEvents = []
+      listener = ((e: CustomEvent) => {
+        dispatchedEvents.push(e.detail)
+      }) as EventListener
+      api.addEventListener('progress_text', listener)
+
+      // Connect the WebSocket so the message handler is active
+      const initPromise = api.init()
+      wsEventHandlers['open'](new Event('open'))
+      wsEventHandlers['message']({
+        data: JSON.stringify({
+          type: 'status',
+          data: {
+            status: { exec_info: { queue_remaining: 0 } },
+            sid: 'test-sid'
+          }
+        })
+      })
+      await initPromise
+    })
+
+    afterEach(() => {
+      api.removeEventListener('progress_text', listener)
+    })
+
+    it('should parse legacy format when server does not support progress_text_metadata', () => {
+      // Client advertises support; intentionally inert — parser checks serverFeatureFlags only
+      vi.mocked(api.getClientFeatureFlags).mockReturnValue({
+        supports_progress_text_metadata: true
+      })
+      // Server does NOT echo support
+      api.serverFeatureFlags.value = {}
+
+      const msg = buildLegacyProgressText('42', 'Generating image...')
+      wsEventHandlers['message']({ data: msg })
+
+      expect(dispatchedEvents).toHaveLength(1)
+      expect(dispatchedEvents[0]).toEqual({
+        nodeId: '42',
+        text: 'Generating image...'
+      })
+    })
+
+    it('should parse new format when server supports progress_text_metadata', () => {
+      // Client advertises support; intentionally inert — parser checks serverFeatureFlags only
+      vi.mocked(api.getClientFeatureFlags).mockReturnValue({
+        supports_progress_text_metadata: true
+      })
+      api.serverFeatureFlags.value = {
+        supports_progress_text_metadata: true
+      }
+
+      const msg = buildNewProgressText('prompt-abc', '42', 'Step 5/20')
+      wsEventHandlers['message']({ data: msg })
+
+      expect(dispatchedEvents).toHaveLength(1)
+      expect(dispatchedEvents[0]).toEqual({
+        nodeId: '42',
+        text: 'Step 5/20',
+        prompt_id: 'prompt-abc'
+      })
+    })
+
+    it('should not corrupt legacy messages when client advertises support but server does not', () => {
+      // This is the exact bug scenario: client says it supports the flag,
+      // server doesn't, but the decoder checks the client flag and tries
+      // to parse a prompt_id that isn't there.
+      // Client advertises support; intentionally inert — parser checks serverFeatureFlags only
+      vi.mocked(api.getClientFeatureFlags).mockReturnValue({
+        supports_progress_text_metadata: true
+      })
+      api.serverFeatureFlags.value = {}
+
+      // Send multiple legacy messages to ensure none are corrupted
+      const messages = [
+        buildLegacyProgressText('7', 'Loading model...'),
+        buildLegacyProgressText('12', 'Sampling 3/20'),
+        buildLegacyProgressText('99', 'VAE decode')
+      ]
+
+      for (const msg of messages) {
+        wsEventHandlers['message']({ data: msg })
+      }
+
+      expect(dispatchedEvents).toHaveLength(3)
+      expect(dispatchedEvents[0]).toMatchObject({
+        nodeId: '7',
+        text: 'Loading model...'
+      })
+      expect(dispatchedEvents[1]).toMatchObject({
+        nodeId: '12',
+        text: 'Sampling 3/20'
+      })
+      expect(dispatchedEvents[2]).toMatchObject({
+        nodeId: '99',
+        text: 'VAE decode'
+      })
+    })
+  })
+
+  it('preserves server-pushed graph change signals', async () => {
+    const socketApi = new ComfyApi()
+    const graphChanged = vi.fn()
+    const autoQueueGraphChanged = vi.fn()
+    socketApi.addEventListener('graphChanged', graphChanged)
+    socketApi.addEventListener('autoQueueGraphChanged', autoQueueGraphChanged)
+    const initPromise = socketApi.init()
+    wsEventHandlers['open'](new Event('open'))
+    wsEventHandlers['message']({
+      data: JSON.stringify({
+        type: 'status',
+        data: {
+          status: { exec_info: { queue_remaining: 0 } },
+          sid: 'test-sid'
+        }
+      })
+    })
+    await initPromise
+
+    const workflow = { nodes: [], links: [] }
+    wsEventHandlers['message']({
+      data: JSON.stringify({ type: 'graphChanged', data: workflow })
+    })
+
+    expect(graphChanged).toHaveBeenCalledOnce()
+    expect(graphChanged.mock.calls[0][0].detail).toEqual(workflow)
+    expect(autoQueueGraphChanged).toHaveBeenCalledOnce()
+
+    wsEventHandlers['message']({
+      data: JSON.stringify({ type: 'autoQueueGraphChanged', data: null })
+    })
+
+    expect(autoQueueGraphChanged).toHaveBeenCalledTimes(2)
+  })
+
+  /**
+   * Pins the resolution behaviour `getServerFeature` had before any override
+   * layer was placed in front of it, so a future layer cannot quietly change
+   * how server values, falsy values, nested paths or defaults resolve.
+   */
+  describe('characterization: resolution with no override present', () => {
+    it('returns the server value verbatim', () => {
+      api.serverFeatureFlags.value = { some_flag: 'server_value' }
+
+      expect(api.getServerFeature('some_flag')).toBe('server_value')
+    })
+
+    it.for([
+      ['false', false],
+      ['zero', 0],
+      ['empty string', '']
+    ] as [label: string, serverValue: unknown][])(
+      'keeps a server value of %s instead of falling back to the default',
+      ([, serverValue]) => {
+        api.serverFeatureFlags.value = { some_flag: serverValue }
+
+        expect(api.getServerFeature('some_flag', 'DEFAULT')).toBe(serverValue)
+      }
+    )
+
+    it('returns the default when the flag is absent', () => {
+      api.serverFeatureFlags.value = {}
+
+      expect(api.getServerFeature('missing_flag', 'DEFAULT')).toBe('DEFAULT')
+    })
+
+    it('returns undefined when the flag is absent and no default is given', () => {
+      api.serverFeatureFlags.value = {}
+
+      expect(api.getServerFeature('missing_flag')).toBeUndefined()
+    })
+
+    it('resolves a nested flag through dot notation', () => {
+      api.serverFeatureFlags.value = {
+        extension: { manager: { supports_v4: true } }
+      }
+
+      expect(api.getServerFeature('extension.manager.supports_v4')).toBe(true)
+    })
+
+    it('returns the default for a nested path that does not exist', () => {
+      api.serverFeatureFlags.value = { extension: {} }
+
+      expect(
+        api.getServerFeature('extension.manager.supports_v4', 'DEFAULT')
+      ).toBe('DEFAULT')
+    })
+  })
+
+  describe('Dev override via localStorage', () => {
+    it('getServerFeature returns localStorage override over server value', () => {
+      api.serverFeatureFlags.value = { some_flag: false }
+      localStorage.setItem('ff:some_flag', 'true')
+
+      expect(api.getServerFeature('some_flag')).toBe(true)
+    })
+
+    it('serverSupportsFeature returns localStorage override over server value', () => {
+      api.serverFeatureFlags.value = { some_flag: false }
+      localStorage.setItem('ff:some_flag', 'true')
+
+      expect(api.serverSupportsFeature('some_flag')).toBe(true)
+    })
+
+    it('getServerFeature override works with numeric values', () => {
+      api.serverFeatureFlags.value = { max_upload_size: 100 }
+      localStorage.setItem('ff:max_upload_size', '999')
+
+      expect(api.getServerFeature('max_upload_size')).toBe(999)
+    })
+  })
+})

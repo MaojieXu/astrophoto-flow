@@ -1,0 +1,279 @@
+<template>
+  <div class="w-96 overflow-x-hidden p-2">
+    <ApiKeyForm
+      v-if="showApiKeyForm"
+      @back="showApiKeyForm = false"
+      @success="onSuccess"
+    />
+    <template v-else>
+      <!-- Header -->
+      <div class="mb-8 flex flex-col gap-4">
+        <h1 class="my-0 text-2xl/normal font-medium">
+          {{ isSignIn ? t('auth.login.title') : t('auth.signup.title') }}
+        </h1>
+        <p class="my-0 text-base">
+          <span class="text-muted">{{
+            isSignIn
+              ? t('auth.login.newUser')
+              : t('auth.signup.alreadyHaveAccount')
+          }}</span>
+          <span
+            class="ml-1 cursor-pointer text-blue-500"
+            @click="toggleState"
+            >{{
+              isSignIn ? t('auth.login.signUp') : t('auth.signup.signIn')
+            }}</span
+          >
+        </p>
+      </div>
+
+      <Message v-if="!isSecureContext" severity="warning" class="mb-4">
+        {{ t('auth.login.insecureContextWarning') }}
+      </Message>
+
+      <!-- Form -->
+      <SignInForm v-if="isSignIn" @submit="signInWithEmail" />
+      <template v-else>
+        <div
+          v-if="regionStatus === 'pending'"
+          data-testid="region-check-pending"
+          class="flex flex-col gap-6"
+        >
+          <Skeleton class="h-10 w-full" />
+          <Skeleton class="h-10 w-full" />
+          <Skeleton class="h-10 w-full" />
+        </div>
+        <Message
+          v-else-if="regionStatus === 'blocked'"
+          severity="warning"
+          class="mb-4"
+        >
+          {{ t('auth.signup.regionRestrictionChina') }}
+        </Message>
+        <SignUpForm v-else ref="signUpForm" @submit="signUpWithEmail" />
+      </template>
+
+      <div class="my-8 flex items-center gap-3">
+        <div class="grow border-t border-interface-stroke" />
+        <span class="shrink-0 text-muted">{{
+          t('auth.login.orContinueWith')
+        }}</span>
+        <div class="grow border-t border-interface-stroke" />
+      </div>
+
+      <!-- Social Login Buttons (hidden if host not whitelisted) -->
+      <div class="flex flex-col gap-6">
+        <Button
+          v-if="desktopHostSso"
+          type="button"
+          class="h-10"
+          variant="secondary"
+          data-testid="desktop-host-sso"
+          @click="signInWithDesktopHost"
+        >
+          <i class="mr-2 icon-[lucide--building-2] size-5" aria-hidden="true" />
+          {{ t('auth.sso.continueWithSso') }}
+        </Button>
+
+        <template v-if="ssoAllowed">
+          <Button
+            type="button"
+            class="h-10"
+            variant="secondary"
+            @click="signInWithGoogle"
+          >
+            <i class="pi pi-google mr-2"></i>
+            {{
+              isSignIn
+                ? t('auth.login.loginWithGoogle')
+                : t('auth.signup.signUpWithGoogle')
+            }}
+          </Button>
+
+          <Button
+            type="button"
+            class="h-10"
+            variant="secondary"
+            @click="signInWithGithub"
+          >
+            <i class="pi pi-github mr-2"></i>
+            {{
+              isSignIn
+                ? t('auth.login.loginWithGithub')
+                : t('auth.signup.signUpWithGithub')
+            }}
+          </Button>
+
+          <p
+            v-if="showGoogleSsoInAppBrowserNotice"
+            class="my-0 text-xs text-muted"
+            data-testid="google-sso-in-app-browser-notice"
+          >
+            {{ t('auth.login.googleSsoInAppBrowserNotice') }}
+          </p>
+        </template>
+
+        <template v-if="!isCloud">
+          <Button
+            type="button"
+            class="h-10"
+            variant="secondary"
+            @click="showApiKeyForm = true"
+          >
+            <img
+              src="/assets/images/comfy-logo-mono.svg"
+              class="mr-2 size-5"
+              :alt="$t('g.comfy')"
+            />
+            {{ t('auth.login.useApiKey') }}
+          </Button>
+          <small class="text-center text-muted">
+            {{ t('auth.apiKey.helpText') }}
+            <a
+              :href="`${comfyPlatformBaseUrl}/login`"
+              target="_blank"
+              class="cursor-pointer text-blue-500"
+            >
+              {{ t('auth.apiKey.generateKey') }}
+            </a>
+          </small>
+        </template>
+        <Message
+          v-model:visible="authActions.accessError.value"
+          severity="info"
+          closable
+        >
+          <template #icon>
+            <i class="pi pi-info-circle" />
+          </template>
+          {{ t('toastMessages.useApiKeyTip') }}
+        </Message>
+      </div>
+
+      <!-- Terms & Contact -->
+      <p class="mt-8 text-xs text-muted">
+        {{ t('auth.login.termsText') }}
+        <a
+          href="https://comfy.org/terms-of-service/"
+          target="_blank"
+          class="cursor-pointer text-blue-500"
+        >
+          {{ t('auth.login.termsLink') }}
+        </a>
+        {{ t('auth.login.andText') }}
+        <a
+          href="https://comfy.org/privacy-policy/"
+          target="_blank"
+          class="cursor-pointer text-blue-500"
+        >
+          {{ t('auth.login.privacyLink') }} </a
+        >.
+        {{ t('auth.login.questionsContactPrefix') }}
+        <a href="mailto:hello@comfy.org" class="cursor-pointer text-blue-500">
+          hello@comfy.org</a
+        >.
+      </p>
+    </template>
+  </div>
+</template>
+
+<script setup lang="ts">
+import { computed, onUnmounted, ref } from 'vue'
+import { useI18n } from 'vue-i18n'
+
+import { useRegionGate } from '@comfyorg/account-ui/auth/regionGate'
+import { isEmbeddedWebView } from '@comfyorg/account-core/webviewDetection'
+
+import Button from '@/components/ui/button/Button.vue'
+import Message from '@/components/ui/message/Message.vue'
+import Skeleton from '@/components/ui/skeleton/Skeleton.vue'
+import { useToast } from '@/components/ui/toast/toastStore'
+import { useAuthActions } from '@/composables/auth/useAuthActions'
+import { useSocialSignIn } from '@/platform/auth/social/useSocialSignIn'
+import { getComfyPlatformBaseUrl } from '@/config/comfyApi'
+import {
+  configValueOrDefault,
+  remoteConfig
+} from '@/platform/remoteConfig/remoteConfig'
+import type { SignInData, SignUpData } from '@/schemas/signInSchema'
+import {
+  isDesktopHostSessionActive,
+  requestDesktopHostSignIn
+} from '@/platform/auth/desktopHost/desktopHostSession'
+import { isCloud } from '@/platform/distribution/types'
+import { isHostWhitelisted, normalizeHost } from '@/utils/hostWhitelist'
+
+import ApiKeyForm from './signin/ApiKeyForm.vue'
+import SignInForm from './signin/SignInForm.vue'
+import SignUpForm from './signin/SignUpForm.vue'
+
+const { onSuccess } = defineProps<{
+  onSuccess: () => void
+}>()
+
+const { t } = useI18n()
+const authActions = useAuthActions()
+const isSecureContext = window.isSecureContext
+const isSignIn = ref(true)
+const showApiKeyForm = ref(false)
+const ssoAllowed = isHostWhitelisted(normalizeHost(window.location.hostname))
+const showGoogleSsoInAppBrowserNotice = isEmbeddedWebView()
+const desktopHostSso = isDesktopHostSessionActive()
+
+const signInWithDesktopHost = async () => {
+  const toast = useToast()
+  toast.info(t('auth.desktopHost.continueInBrowser'), { duration: 6000 })
+  if (await requestDesktopHostSignIn()) {
+    onSuccess()
+    return
+  }
+  toast.error(t('auth.desktopHost.signInFailed'), { duration: 6000 })
+}
+const comfyPlatformBaseUrl = computed(() =>
+  configValueOrDefault(
+    remoteConfig.value,
+    'comfy_platform_base_url',
+    getComfyPlatformBaseUrl()
+  )
+)
+
+const toggleState = () => {
+  isSignIn.value = !isSignIn.value
+  showApiKeyForm.value = false
+}
+
+const { signInWithGoogle, signInWithGithub } = useSocialSignIn({
+  isNewUser: () => !isSignIn.value,
+  onSignedIn: onSuccess
+})
+
+const signInWithEmail = async (values: SignInData) => {
+  if (await authActions.signInWithEmail(values.email, values.password)) {
+    onSuccess()
+  }
+}
+
+const signUpForm = ref<InstanceType<typeof SignUpForm> | null>(null)
+
+const signUpWithEmail = async (values: SignUpData, turnstileToken?: string) => {
+  if (
+    await authActions.signUpWithEmail(
+      values.email,
+      values.password,
+      turnstileToken
+    )
+  ) {
+    onSuccess()
+  } else {
+    // Signup failed while the form is still mounted: re-arm the single-use
+    // Turnstile token so the next attempt sends a fresh one.
+    signUpForm.value?.resetTurnstile()
+  }
+}
+
+const { status: regionStatus } = useRegionGate()
+
+onUnmounted(() => {
+  authActions.accessError.value = false
+})
+</script>

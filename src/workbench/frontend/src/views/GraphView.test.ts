@@ -1,0 +1,349 @@
+import { render, screen, waitFor } from '@testing-library/vue'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { createI18n } from 'vue-i18n'
+
+import { useReconnectQueueRefresh } from '@/composables/useReconnectQueueRefresh'
+import { useReconnectingNotification } from '@/composables/useReconnectingNotification'
+import type * as DistributionTypes from '@/platform/distribution/types'
+import { useVersionCompatibilityStore } from '@/platform/updates/common/versionCompatibilityStore'
+import { app } from '@/scripts/app'
+import { useAssetsStore } from '@/stores/assetsStore'
+import { useExecutionStore } from '@/stores/executionStore'
+import { useMenuItemStore } from '@/stores/menuItemStore'
+import { useTemplateInputDownloadStore } from '@/stores/templateInputDownloadStore'
+import { useSidebarTabStore } from '@/stores/workspace/sidebarTabStore'
+
+beforeEach(() => {
+  vi.mocked(useVersionCompatibilityStore().initialize).mockResolvedValue(
+    undefined
+  )
+  vi.mocked(useExecutionStore().bindExecutionEvents).mockImplementation(
+    () => {}
+  )
+  vi.mocked(useExecutionStore().unbindExecutionEvents).mockImplementation(
+    () => {}
+  )
+  vi.mocked(useMenuItemStore().registerCoreMenuCommands).mockImplementation(
+    () => {}
+  )
+})
+
+const apiMock = vi.hoisted(() =>
+  Object.assign(new EventTarget(), {
+    getServerFeature: vi.fn((_name: string, fallback?: unknown) => fallback),
+    getSystemStats: vi.fn(async () => ({ system: {}, devices: [] })),
+    getQueue: vi.fn(async () => ({ Running: [], Pending: [] })),
+    getHistory: vi.fn(async () => [])
+  })
+)
+const distribution = vi.hoisted(
+  (): {
+    isCloud: typeof DistributionTypes.isCloud
+    isDesktop: typeof DistributionTypes.isDesktop
+  } => ({
+    isCloud: false,
+    isDesktop: false
+  })
+)
+
+const templateInputMock = vi.hoisted(() => ({
+  completeGraphSync: vi.fn(),
+  refreshBindings: vi.fn(),
+  runMissingMediaPipeline: vi.fn(async () => undefined),
+  scanCandidates: vi.fn(() => [
+    {
+      nodeId: '2',
+      nodeType: 'LoadImage',
+      widgetName: 'image',
+      mediaType: 'image',
+      name: 'subject.png',
+      isMissing: true
+    }
+  ]),
+  stopProgress: vi.fn(),
+  subscribeProgress: vi.fn(),
+  updateProgress: vi.fn()
+}))
+
+vi.mock<unknown>(import('@/scripts/api'), () => ({ api: apiMock }))
+vi.mock(import('firebase/auth'))
+
+vi.mock<unknown>(import('@/scripts/app'), () => ({
+  app: {
+    rootGraph: { getNodeById: vi.fn(), nodes: [] },
+    reloadNodeDefs: vi.fn(async () => undefined),
+    ui: {
+      menuContainer: { style: { setProperty: vi.fn() } },
+      restoreMenuPosition: vi.fn()
+    }
+  }
+}))
+
+vi.mock(import('@/composables/sidebarTabs/registerCoreSidebarTabs'), () => ({
+  registerCoreSidebarTabs: vi.fn()
+}))
+
+vi.mock(
+  import('@/composables/bottomPanelTabs/registerCoreBottomPanelTabs'),
+  () => ({ registerCoreBottomPanelTabs: vi.fn(async () => {}) })
+)
+
+vi.mock(import('@/composables/useReconnectQueueRefresh'), () => {
+  const refreshOnReconnect = vi.fn(async () => {})
+  return { useReconnectQueueRefresh: () => refreshOnReconnect }
+})
+
+vi.mock(import('@/composables/useReconnectingNotification'), () => {
+  const onReconnected = vi.fn()
+  const onReconnecting = vi.fn()
+  return {
+    useReconnectingNotification: () => ({ onReconnected, onReconnecting })
+  }
+})
+
+vi.mock(import('@/base/common/async'), () => ({ runWhenGlobalIdle: vi.fn() }))
+vi.mock(import('@/composables/useBrowserTabTitle'), () => ({
+  useBrowserTabTitle: vi.fn()
+}))
+vi.mock(import('@/composables/useCoreCommands'), () => ({
+  useCoreCommands: () => []
+}))
+vi.mock(import('@/platform/remote/comfyui/useQueuePolling'), () => ({
+  useQueuePolling: vi.fn()
+}))
+vi.mock(import('@/composables/useErrorHandling'))
+vi.mock(import('@/composables/useProgressFavicon'), () => ({
+  useProgressFavicon: vi.fn()
+}))
+vi.mock(import('@/platform/distribution/types'), () => distribution)
+vi.mock<unknown>(
+  import('@/platform/missingMedia/missingMediaPipeline'),
+  () => ({
+    runMissingMediaPipeline: templateInputMock.runMissingMediaPipeline
+  })
+)
+vi.mock<unknown>(import('@/platform/missingMedia/missingMediaScan'), () => ({
+  scanAllMediaCandidates: templateInputMock.scanCandidates
+}))
+vi.mock<unknown>(
+  import('@/platform/workflow/templates/utils/refreshDownloadedTemplateInputBindings'),
+  () => ({
+    refreshDownloadedTemplateInputBindings: templateInputMock.refreshBindings
+  })
+)
+
+vi.mock(import('@/platform/telemetry'))
+vi.mock(
+  import('@/platform/updates/common/useFrontendVersionMismatchWarning'),
+  () => ({
+    useFrontendVersionMismatchWarning: vi.fn()
+  })
+)
+
+vi.mock(import('@/services/autoQueueService'), () => ({
+  setupAutoQueueHandler: vi.fn()
+}))
+vi.mock<unknown>(import('@/platform/keybindings/keybindingService'), () => ({
+  useKeybindingService: () => ({
+    registerCoreKeybindings: vi.fn(),
+    keybindHandler: vi.fn()
+  })
+}))
+
+vi.mock<unknown>(import('@/utils/envUtil'), () => ({
+  electronAPI: () => ({
+    changeTheme: vi.fn(),
+    Events: { incrementUserProperty: vi.fn(), trackEvent: vi.fn() }
+  })
+}))
+
+// Module-mock heavy child components so we don't pay their import cost.
+const stubModule = { default: { template: '<div />' } }
+vi.mock<unknown>(
+  import('@/components/actionbar/PartnerNodesEducationCard.vue'),
+  () => ({
+    default: { template: '<div data-testid="education-card-stub" />' }
+  })
+)
+vi.mock<unknown>(import('@/components/graph/GraphCanvas.vue'), () => stubModule)
+vi.mock<unknown>(import('@/views/LinearView.vue'), () => stubModule)
+vi.mock<unknown>(
+  import('@/platform/settings/components/SettingDialog.vue'),
+  () => stubModule
+)
+vi.mock<unknown>(
+  import('@/platform/assets/components/AssetBrowserModal.vue'),
+  () => stubModule
+)
+vi.mock<unknown>(
+  import('@/components/builder/BuilderToolbar.vue'),
+  () => stubModule
+)
+vi.mock<unknown>(
+  import('@/components/builder/BuilderMenu.vue'),
+  () => stubModule
+)
+vi.mock<unknown>(
+  import('@/components/builder/BuilderFooterToolbar.vue'),
+  () => stubModule
+)
+vi.mock<unknown>(
+  import('@/workbench/extensions/manager/components/ManagerProgressToast.vue'),
+
+  () => stubModule
+)
+vi.mock<unknown>(
+  import('@/platform/cloud/notification/components/DesktopCloudNotificationController.vue'),
+  () => stubModule
+)
+vi.mock<unknown>(
+  import('@/platform/assets/components/ModelImportProgressDialog.vue'),
+  () => stubModule
+)
+vi.mock<unknown>(
+  import('@/platform/assets/components/AssetExportProgressDialog.vue'),
+  () => stubModule
+)
+vi.mock<unknown>(import('@/components/MenuHamburger.vue'), () => stubModule)
+vi.mock<unknown>(
+  import('@/components/dialog/UnloadWindowConfirmDialog.vue'),
+  () => stubModule
+)
+vi.mock<unknown>(
+  import('@/renderer/extensions/firstRunTour/FirstRunTour.vue'),
+
+  () => stubModule
+)
+
+// Imported at module scope, not inside the test. `vi.mock` is hoisted above
+// every import, so the stubs above still apply — but compiling GraphView.vue
+// and its import graph costs seconds, and awaited inside a test body that is
+// billed against the 5 s test timeout. That is what failed this test under a
+// loaded worker pool while it passed in isolation (#14666).
+const { default: GraphView } = await import('./GraphView.vue')
+
+const i18n = createI18n({ legacy: false, locale: 'en', messages: { en: {} } })
+
+describe('GraphView - reconnect wiring', () => {
+  beforeEach(() => {
+    distribution.isDesktop = false
+    templateInputMock.subscribeProgress.mockReturnValue(
+      templateInputMock.stopProgress
+    )
+    const inputStore = useTemplateInputDownloadStore()
+    vi.mocked(inputStore.completeGraphSync).mockImplementation(
+      templateInputMock.completeGraphSync
+    )
+    vi.mocked(inputStore.updateProgress).mockImplementation(
+      templateInputMock.updateProgress
+    )
+    delete window.__comfyDesktop2
+  })
+
+  it('wires the reconnected event to the toast and queue refresh', () => {
+    render(GraphView, { global: { plugins: [i18n] } })
+
+    apiMock.dispatchEvent(new Event('reconnected'))
+
+    // `handleReconnected` calls both before its first `await`, so dispatching
+    // the event is enough — there is nothing to wait for, and waiting for it
+    // only hid how long the import above was taking.
+    expect(useReconnectingNotification().onReconnected).toHaveBeenCalledTimes(1)
+    expect(useReconnectQueueRefresh()).toHaveBeenCalledTimes(1)
+  })
+
+  it('reconciles a completed template input without a page refresh', async () => {
+    distribution.isDesktop = true
+    Object.defineProperty(window, '__comfyDesktop2', {
+      configurable: true,
+      value: {
+        isRemote: () => false,
+        onTemplateInputDownloadProgress: templateInputMock.subscribeProgress
+      }
+    })
+    render(GraphView, { global: { plugins: [i18n] } })
+
+    const listener = templateInputMock.subscribeProgress.mock.calls[0]?.[0]
+    expect(listener).toBeTypeOf('function')
+
+    listener({
+      downloadId: 'download-1',
+      filename: 'subject.png',
+      progress: 1,
+      status: 'completed',
+      templateInputs: [{ templateId: 'starter-detail', assetId: 'subject' }]
+    })
+
+    await waitFor(() => {
+      expect(templateInputMock.runMissingMediaPipeline).toHaveBeenCalledOnce()
+    })
+    expect(templateInputMock.updateProgress).toHaveBeenCalledOnce()
+    expect(templateInputMock.refreshBindings).toHaveBeenCalledOnce()
+    expect(templateInputMock.completeGraphSync).toHaveBeenCalledWith([
+      'subject.png'
+    ])
+  })
+
+  it('releases a completed template input when the graph refresh fails', async () => {
+    distribution.isDesktop = true
+    Object.defineProperty(window, '__comfyDesktop2', {
+      configurable: true,
+      value: {
+        isRemote: () => false,
+        onTemplateInputDownloadProgress: templateInputMock.subscribeProgress
+      }
+    })
+    vi.mocked(app.reloadNodeDefs).mockRejectedValueOnce(
+      new Error('reload failed')
+    )
+    render(GraphView, { global: { plugins: [i18n] } })
+
+    templateInputMock.subscribeProgress.mock.calls[0]?.[0]({
+      downloadId: 'download-1',
+      filename: 'subject.png',
+      progress: 1,
+      status: 'completed',
+      templateInputs: []
+    })
+
+    await waitFor(() => {
+      expect(templateInputMock.completeGraphSync).toHaveBeenCalledWith([
+        'subject.png'
+      ])
+    })
+    expect(templateInputMock.refreshBindings).not.toHaveBeenCalled()
+  })
+})
+
+describe('GraphView - output assets refresh', () => {
+  it('reloads output assets on execution_success while the assets sidebar is inactive', async () => {
+    render(GraphView, { global: { plugins: [i18n] } })
+
+    useSidebarTabStore().activeSidebarTabId = null
+    const loadNew = vi.spyOn(useAssetsStore().outputAssets, 'loadNew')
+
+    apiMock.dispatchEvent(new Event('execution_success'))
+
+    await waitFor(() => expect(loadNew).toHaveBeenCalledTimes(1))
+  })
+})
+
+describe('GraphView - partner nodes education card', () => {
+  afterEach(() => {
+    distribution.isCloud = false
+  })
+
+  it('mounts the card on local builds', () => {
+    render(GraphView, { global: { plugins: [i18n] } })
+
+    expect(screen.getByTestId('education-card-stub')).toBeInTheDocument()
+  })
+
+  it('never mounts the card on cloud', () => {
+    distribution.isCloud = true
+
+    render(GraphView, { global: { plugins: [i18n] } })
+
+    expect(screen.queryByTestId('education-card-stub')).not.toBeInTheDocument()
+  })
+})

@@ -1,0 +1,40 @@
+# Bilingual-pair consistency record for .agents/notes/proposed/feature/2026-11-14-library-browsing-and-editing.md ↔ .agents/notes/proposed/feature/2026-11-14-library-browsing-and-editing.zh.md: per heading
+# section, a hash of its English and Chinese blocks outside code blocks and generated regions.
+# After editing either side, bring the other along and re-record with:
+#   pnpm run verify-translation-pairing --write .agents/notes/proposed/feature/2026-11-14-library-browsing-and-editing.md
+/agent-note-the-library-is-one-queryable-list:
+  en: 9a69e2c471c10071
+  zh: d60e33107d376c56
+/agent-note-the-library-is-one-queryable-list/problem:
+  en: 8070a681f19cee20
+  zh: bb4af07f147e0a0d
+/agent-note-the-library-is-one-queryable-list/proposal:
+  en: 9ece63d223833e33
+  zh: 330dd23580b73a90
+/agent-note-the-library-is-one-queryable-list/proposal/one-list:
+  en: eebc72f5d69b2319
+  zh: 6d5592571c7e2e91
+/agent-note-the-library-is-one-queryable-list/proposal/columns-and-filters:
+  en: 58545c50431ff207
+  zh: 1446a23146952cf1
+/agent-note-the-library-is-one-queryable-list/proposal/editing:
+  en: e7f88e6f2dbc222b
+  zh: 2d13cbdbde7af4d4
+/agent-note-the-library-is-one-queryable-list/proposal/detail-and-preview:
+  en: f1db73f67d2747df
+  zh: 15c133b5bbc63ae1
+/agent-note-the-library-is-one-queryable-list/proposal/canvas-handoff:
+  en: f6ff2e9dde2433d5
+  zh: 9113916ab7cbcd06
+/agent-note-the-library-is-one-queryable-list/proposal/change-detection:
+  en: 654a21cc50d2e65b
+  zh: 2529e1406de25b77
+/agent-note-the-library-is-one-queryable-list/alternatives-considered:
+  en: 1e0999773678683b
+  zh: a626f18c2398ecbe
+/agent-note-the-library-is-one-queryable-list/acceptance-criteria:
+  en: c30efc000ff0a3b0
+  zh: c929edfad7291ac7
+/agent-note-the-library-is-one-queryable-list/risks:
+  en: 5e1fc903cee59199
+  zh: 626779b4daa47b9a

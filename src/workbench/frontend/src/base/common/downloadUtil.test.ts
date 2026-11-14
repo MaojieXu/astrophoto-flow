@@ -1,0 +1,522 @@
+import { fromAny, fromPartial } from '@total-typescript/shoehorn'
+import type { MockInstance } from 'vitest'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
+
+import {
+  downloadFile,
+  downloadFileAsBlob,
+  extractFilenameFromContentDisposition,
+  openFileInNewTab
+} from '@/base/common/downloadUtil'
+
+const { mockIsCloud } = vi.hoisted(() => ({
+  mockIsCloud: { value: false }
+}))
+
+vi.mock(
+  import('@/platform/distribution/types'), // oxlint-disable-line comfy/no-restricted-paths
+  () => ({
+    get isCloud() {
+      return mockIsCloud.value
+    }
+  })
+)
+
+vi.mock(import('@/i18n'))
+
+let createObjectURLSpy: MockInstance<typeof URL.createObjectURL>
+let revokeObjectURLSpy: MockInstance<typeof URL.revokeObjectURL>
+
+describe('downloadUtil', () => {
+  let mockLink: HTMLAnchorElement
+
+  beforeEach(() => {
+    createObjectURLSpy = vi
+      .spyOn(URL, 'createObjectURL')
+      .mockReturnValue('blob:mock-url')
+    revokeObjectURLSpy = vi
+      .spyOn(URL, 'revokeObjectURL')
+      .mockImplementation(() => {})
+    mockIsCloud.value = false
+    createObjectURLSpy.mockClear().mockReturnValue('blob:mock-url')
+    revokeObjectURLSpy.mockClear().mockImplementation(() => {})
+    // Create a mock anchor element
+    mockLink = fromPartial<HTMLAnchorElement>({
+      href: '',
+      download: '',
+      click: vi.fn(),
+      style: { display: '' }
+    })
+
+    // Spy on DOM methods
+    vi.spyOn(document, 'createElement').mockReturnValue(mockLink)
+    vi.spyOn(document.body, 'appendChild').mockImplementation(() => mockLink)
+    vi.spyOn(document.body, 'removeChild').mockImplementation(() => mockLink)
+  })
+
+  describe('downloadFile', () => {
+    it('should create and trigger download with basic URL', () => {
+      const testUrl = 'https://example.com/image.png'
+
+      downloadFile(testUrl)
+
+      expect(document.createElement).toHaveBeenCalledWith('a')
+      expect(mockLink.href).toBe(testUrl)
+      expect(mockLink.download).toBe('download.png') // Default filename
+      expect(document.body.appendChild).toHaveBeenCalledWith(mockLink)
+      expect(mockLink.click).toHaveBeenCalled()
+      expect(document.body.removeChild).toHaveBeenCalledWith(mockLink)
+      expect(fetch).not.toHaveBeenCalled()
+      expect(createObjectURLSpy).not.toHaveBeenCalled()
+    })
+
+    it('should use custom filename when provided', () => {
+      const testUrl = 'https://example.com/image.png'
+      const customFilename = 'my-custom-image.png'
+
+      downloadFile(testUrl, customFilename)
+
+      expect(mockLink.href).toBe(testUrl)
+      expect(mockLink.download).toBe(customFilename)
+      expect(fetch).not.toHaveBeenCalled()
+      expect(createObjectURLSpy).not.toHaveBeenCalled()
+    })
+
+    it('should extract filename from URL query parameters', () => {
+      const testUrl =
+        'https://example.com/api/file?filename=extracted-image.jpg&other=param'
+
+      downloadFile(testUrl)
+
+      expect(mockLink.href).toBe(testUrl)
+      expect(mockLink.download).toBe('extracted-image.jpg')
+      expect(createObjectURLSpy).not.toHaveBeenCalled()
+    })
+
+    it('should use default filename when URL has no filename parameter', () => {
+      const testUrl = 'https://example.com/api/file?other=param'
+
+      downloadFile(testUrl)
+
+      expect(mockLink.href).toBe(testUrl)
+      expect(mockLink.download).toBe('download.png')
+      expect(createObjectURLSpy).not.toHaveBeenCalled()
+    })
+
+    it('should handle invalid URLs gracefully', () => {
+      const invalidUrl = 'not-a-valid-url'
+
+      downloadFile(invalidUrl)
+
+      expect(mockLink.href).toBe(invalidUrl)
+      expect(mockLink.download).toBe('download.png')
+      expect(mockLink.click).toHaveBeenCalled()
+      expect(fetch).not.toHaveBeenCalled()
+      expect(createObjectURLSpy).not.toHaveBeenCalled()
+    })
+
+    it('should prefer custom filename over extracted filename', () => {
+      const testUrl =
+        'https://example.com/api/file?filename=extracted-image.jpg'
+      const customFilename = 'custom-override.png'
+
+      downloadFile(testUrl, customFilename)
+
+      expect(mockLink.download).toBe(customFilename)
+      expect(createObjectURLSpy).not.toHaveBeenCalled()
+    })
+
+    it('should handle URLs with empty filename parameter', () => {
+      const testUrl = 'https://example.com/api/file?filename='
+
+      downloadFile(testUrl)
+
+      expect(mockLink.download).toBe('download.png')
+      expect(createObjectURLSpy).not.toHaveBeenCalled()
+    })
+
+    it('should handle relative URLs by using window.location.origin', () => {
+      const relativeUrl = '/api/file?filename=relative-image.png'
+
+      downloadFile(relativeUrl)
+
+      expect(mockLink.href).toBe(relativeUrl)
+      expect(mockLink.download).toBe('relative-image.png')
+      expect(fetch).not.toHaveBeenCalled()
+      expect(createObjectURLSpy).not.toHaveBeenCalled()
+    })
+
+    it('streams downloads via blob when running in cloud', async () => {
+      mockIsCloud.value = true
+      const testUrl = 'https://storage.googleapis.com/bucket/file.bin'
+      const blob = new Blob(['test'])
+      const blobFn = vi.fn().mockResolvedValue(blob)
+      const headersMock = {
+        get: vi.fn().mockReturnValue(null)
+      }
+      vi.mocked(fetch).mockResolvedValue(
+        fromPartial<Response>({
+          ok: true,
+          status: 200,
+          blob: blobFn,
+          headers: headersMock
+        })
+      )
+
+      downloadFile(testUrl)
+
+      expect(fetch).toHaveBeenCalledWith(testUrl)
+      const fetchPromise = vi.mocked(fetch).mock.results[0]
+        .value as Promise<Response>
+      await fetchPromise
+      await Promise.resolve() // let fetchAsBlob return
+      const blobPromise = blobFn.mock.results[0].value as Promise<Blob>
+      await blobPromise
+      await Promise.resolve()
+      expect(blobFn).toHaveBeenCalled()
+      expect(createObjectURLSpy).toHaveBeenCalledWith(blob)
+      expect(revokeObjectURLSpy).toHaveBeenCalledWith('blob:mock-url')
+      expect(mockLink.click).toHaveBeenCalled()
+    })
+
+    it('logs an error when cloud fetch fails', async () => {
+      mockIsCloud.value = true
+      const testUrl = 'https://storage.googleapis.com/bucket/missing.bin'
+      vi.mocked(fetch).mockResolvedValue(
+        fromPartial<Response>({
+          ok: false,
+          status: 404,
+          blob: vi.fn()
+        })
+      )
+
+      downloadFile(testUrl)
+
+      expect(fetch).toHaveBeenCalledWith(testUrl)
+      const fetchPromise = vi.mocked(fetch).mock.results[0]
+        .value as Promise<Response>
+      await fetchPromise
+      await Promise.resolve() // let fetchAsBlob throw
+      await Promise.resolve() // let .catch handler run
+      expect(console.error).toHaveBeenCalled()
+      expect(createObjectURLSpy).not.toHaveBeenCalled()
+    })
+
+    it('uses filename from Content-Disposition header in cloud mode', async () => {
+      mockIsCloud.value = true
+      const testUrl = 'https://storage.googleapis.com/bucket/abc123.png'
+      const blob = new Blob(['test'])
+      const blobFn = vi.fn().mockResolvedValue(blob)
+      const headersMock = {
+        get: vi.fn().mockReturnValue('attachment; filename="user-friendly.png"')
+      }
+      vi.mocked(fetch).mockResolvedValue(
+        fromPartial<Response>({
+          ok: true,
+          status: 200,
+          blob: blobFn,
+          headers: headersMock
+        })
+      )
+
+      downloadFile(testUrl)
+
+      expect(fetch).toHaveBeenCalledWith(testUrl)
+      const fetchPromise = vi.mocked(fetch).mock.results[0]
+        .value as Promise<Response>
+      await fetchPromise
+      await Promise.resolve() // let fetchAsBlob return
+      const blobPromise = blobFn.mock.results[0].value as Promise<Blob>
+      await blobPromise
+      await Promise.resolve()
+      expect(headersMock.get).toHaveBeenCalledWith('Content-Disposition')
+      expect(mockLink.download).toBe('user-friendly.png')
+    })
+
+    it('uses RFC 5987 filename from Content-Disposition header', async () => {
+      mockIsCloud.value = true
+      const testUrl = 'https://storage.googleapis.com/bucket/abc123.png'
+      const blob = new Blob(['test'])
+      const blobFn = vi.fn().mockResolvedValue(blob)
+      const headersMock = {
+        get: vi
+          .fn()
+          .mockReturnValue(
+            'attachment; filename="fallback.png"; filename*=UTF-8\'\'%E4%B8%AD%E6%96%87.png'
+          )
+      }
+      vi.mocked(fetch).mockResolvedValue(
+        fromPartial<Response>({
+          ok: true,
+          status: 200,
+          blob: blobFn,
+          headers: headersMock
+        })
+      )
+
+      downloadFile(testUrl)
+
+      const fetchPromise = vi.mocked(fetch).mock.results[0]
+        .value as Promise<Response>
+      await fetchPromise
+      await Promise.resolve() // let fetchAsBlob return
+      const blobPromise = blobFn.mock.results[0].value as Promise<Blob>
+      await blobPromise
+      await Promise.resolve()
+      expect(mockLink.download).toBe('中文.png')
+    })
+
+    it('falls back to provided filename when Content-Disposition is missing', async () => {
+      mockIsCloud.value = true
+      const testUrl = 'https://storage.googleapis.com/bucket/abc123.png'
+      const blob = new Blob(['test'])
+      const blobFn = vi.fn().mockResolvedValue(blob)
+      const headersMock = {
+        get: vi.fn().mockReturnValue(null)
+      }
+      vi.mocked(fetch).mockResolvedValue(
+        fromPartial<Response>({
+          ok: true,
+          status: 200,
+          blob: blobFn,
+          headers: headersMock
+        })
+      )
+
+      downloadFile(testUrl, 'my-fallback.png')
+
+      const fetchPromise = vi.mocked(fetch).mock.results[0]
+        .value as Promise<Response>
+      await fetchPromise
+      await Promise.resolve() // let fetchAsBlob return
+      const blobPromise = blobFn.mock.results[0].value as Promise<Blob>
+      await blobPromise
+      await Promise.resolve()
+      expect(mockLink.download).toBe('my-fallback.png')
+    })
+  })
+
+  describe('downloadFileAsBlob', () => {
+    it('rejects a non-OK response without starting a download', async () => {
+      const fetchFile = vi
+        .fn<(url: string) => Promise<Response>>()
+        .mockResolvedValue(new Response(null, { status: 503 }))
+
+      await expect(
+        downloadFileAsBlob('/api/asset', {
+          filename: 'asset.png',
+          fetch: fetchFile
+        })
+      ).rejects.toThrow('Failed to fetch /api/asset: 503')
+      expect(mockLink.click).not.toHaveBeenCalled()
+    })
+
+    it('propagates a rejected fetch without starting a download', async () => {
+      const networkError = new Error('network unavailable')
+      const fetchFile = vi
+        .fn<(url: string) => Promise<Response>>()
+        .mockRejectedValue(networkError)
+
+      await expect(
+        downloadFileAsBlob('/api/asset', {
+          filename: 'asset.png',
+          fetch: fetchFile
+        })
+      ).rejects.toBe(networkError)
+      expect(mockLink.click).not.toHaveBeenCalled()
+    })
+  })
+
+  describe('openFileInNewTab', () => {
+    let windowOpenSpy: ReturnType<typeof vi.spyOn>
+
+    beforeEach(() => {
+      windowOpenSpy = vi.spyOn(window, 'open').mockImplementation(() => null)
+    })
+
+    it('opens URL directly when not in cloud mode', async () => {
+      mockIsCloud.value = false
+      const testUrl = 'https://example.com/image.png'
+
+      await openFileInNewTab(testUrl)
+
+      expect(windowOpenSpy).toHaveBeenCalledWith(testUrl, '_blank')
+      expect(fetch).not.toHaveBeenCalled()
+    })
+
+    it('opens blank tab synchronously then navigates to blob URL in cloud mode', async () => {
+      mockIsCloud.value = true
+      const testUrl = 'https://storage.googleapis.com/bucket/image.png'
+      const blob = new Blob(['test'], { type: 'image/png' })
+      const mockTab = { location: { href: '' }, closed: false, close: vi.fn() }
+      windowOpenSpy.mockReturnValue(fromAny<Window, unknown>(mockTab))
+      vi.mocked(fetch).mockResolvedValue(
+        fromPartial<Response>({
+          ok: true,
+          blob: vi.fn().mockResolvedValue(blob)
+        })
+      )
+
+      await openFileInNewTab(testUrl)
+
+      expect(windowOpenSpy).toHaveBeenCalledWith('', '_blank')
+      expect(fetch).toHaveBeenCalledWith(testUrl)
+      expect(createObjectURLSpy).toHaveBeenCalledWith(blob)
+      expect(mockTab.location.href).toBe('blob:mock-url')
+    })
+
+    it('neutralizes non-media content types before creating the blob URL', async () => {
+      mockIsCloud.value = true
+      const htmlBlob = new Blob(
+        ['<script>globalThis.__pwned = true</script>'],
+        {
+          type: 'text/html'
+        }
+      )
+      const mockTab = { location: { href: '' }, closed: false, close: vi.fn() }
+      windowOpenSpy.mockReturnValue(fromAny<Window, unknown>(mockTab))
+      vi.mocked(fetch).mockResolvedValue(
+        fromPartial<Response>({
+          ok: true,
+          blob: vi.fn().mockResolvedValue(htmlBlob)
+        })
+      )
+
+      await openFileInNewTab('https://storage.googleapis.com/bucket/evil.png')
+
+      expect(createObjectURLSpy).toHaveBeenCalledWith(
+        expect.objectContaining({ type: 'application/octet-stream' })
+      )
+    })
+
+    it('preserves a media type carrying codec parameters', async () => {
+      mockIsCloud.value = true
+      const audioBlob = new Blob(['test'], { type: 'audio/ogg; codecs=opus' })
+      const mockTab = { location: { href: '' }, closed: false, close: vi.fn() }
+      windowOpenSpy.mockReturnValue(fromAny<Window, unknown>(mockTab))
+      vi.mocked(fetch).mockResolvedValue(
+        fromPartial<Response>({
+          ok: true,
+          blob: vi.fn().mockResolvedValue(audioBlob)
+        })
+      )
+
+      await openFileInNewTab('https://storage.googleapis.com/bucket/clip.ogg')
+
+      expect(createObjectURLSpy).toHaveBeenCalledWith(audioBlob)
+    })
+
+    it('revokes blob URL after timeout in cloud mode', async () => {
+      mockIsCloud.value = true
+      const blob = new Blob(['test'], { type: 'image/png' })
+      const mockTab = { location: { href: '' }, closed: false, close: vi.fn() }
+      windowOpenSpy.mockReturnValue(fromAny<Window, unknown>(mockTab))
+      vi.mocked(fetch).mockResolvedValue(
+        fromPartial<Response>({
+          ok: true,
+          blob: vi.fn().mockResolvedValue(blob)
+        })
+      )
+
+      await openFileInNewTab('https://example.com/image.png')
+
+      expect(revokeObjectURLSpy).not.toHaveBeenCalled()
+      vi.advanceTimersByTime(60_000)
+      expect(revokeObjectURLSpy).toHaveBeenCalledWith('blob:mock-url')
+    })
+
+    it('closes blank tab and logs error when cloud fetch fails', async () => {
+      mockIsCloud.value = true
+      const testUrl = 'https://storage.googleapis.com/bucket/missing.png'
+      const mockTab = { location: { href: '' }, closed: false, close: vi.fn() }
+      windowOpenSpy.mockReturnValue(fromAny<Window, unknown>(mockTab))
+      vi.mocked(fetch).mockResolvedValue(
+        fromPartial<Response>({ ok: false, status: 404 })
+      )
+
+      await openFileInNewTab(testUrl)
+
+      expect(mockTab.close).toHaveBeenCalled()
+      expect(console.error).toHaveBeenCalled()
+    })
+
+    it('revokes blob URL immediately if tab was closed by user', async () => {
+      mockIsCloud.value = true
+      const blob = new Blob(['test'], { type: 'image/png' })
+      const mockTab = { location: { href: '' }, closed: true, close: vi.fn() }
+      windowOpenSpy.mockReturnValue(fromAny<Window, unknown>(mockTab))
+      vi.mocked(fetch).mockResolvedValue(
+        fromPartial<Response>({
+          ok: true,
+          blob: vi.fn().mockResolvedValue(blob)
+        })
+      )
+
+      await openFileInNewTab('https://example.com/image.png')
+
+      expect(revokeObjectURLSpy).toHaveBeenCalledWith('blob:mock-url')
+      expect(mockTab.location.href).toBe('')
+    })
+  })
+
+  describe('extractFilenameFromContentDisposition', () => {
+    it('returns null for null header', () => {
+      expect(extractFilenameFromContentDisposition(null)).toBeNull()
+    })
+
+    it('returns null for empty header', () => {
+      expect(extractFilenameFromContentDisposition('')).toBeNull()
+    })
+
+    it('extracts filename from simple quoted format', () => {
+      const header = 'attachment; filename="test-file.png"'
+      expect(extractFilenameFromContentDisposition(header)).toBe(
+        'test-file.png'
+      )
+    })
+
+    it('extracts filename from unquoted format', () => {
+      const header = 'attachment; filename=test-file.png'
+      expect(extractFilenameFromContentDisposition(header)).toBe(
+        'test-file.png'
+      )
+    })
+
+    it('extracts filename from RFC 5987 format', () => {
+      const header = "attachment; filename*=UTF-8''test%20file.png"
+      expect(extractFilenameFromContentDisposition(header)).toBe(
+        'test file.png'
+      )
+    })
+
+    it('prefers RFC 5987 format over simple format', () => {
+      const header =
+        'attachment; filename="fallback.png"; filename*=UTF-8\'\'preferred.png'
+      expect(extractFilenameFromContentDisposition(header)).toBe(
+        'preferred.png'
+      )
+    })
+
+    it('handles unicode characters in RFC 5987 format', () => {
+      const header =
+        "attachment; filename*=UTF-8''%E4%B8%AD%E6%96%87%E6%96%87%E4%BB%B6.png"
+      expect(extractFilenameFromContentDisposition(header)).toBe('中文文件.png')
+    })
+
+    it('falls back to simple format when RFC 5987 decoding fails', () => {
+      const header =
+        'attachment; filename="fallback.png"; filename*=UTF-8\'\'%invalid'
+      expect(extractFilenameFromContentDisposition(header)).toBe('fallback.png')
+    })
+
+    it('handles header with only attachment disposition', () => {
+      const header = 'attachment'
+      expect(extractFilenameFromContentDisposition(header)).toBeNull()
+    })
+
+    it('handles case-insensitive filename parameter', () => {
+      const header = 'attachment; FILENAME="test.png"'
+      expect(extractFilenameFromContentDisposition(header)).toBe('test.png')
+    })
+  })
+})

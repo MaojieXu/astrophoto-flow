@@ -14,6 +14,7 @@
     "verify-agent-note-format": "tsx scripts/verify-agent-note-format.ts",
     "verify-archived-agent-notes": "tsx scripts/verify-archived-agent-notes.ts",
     "verify-doc-budgets": "tsx scripts/verify-doc-budgets.ts",
+    "verify-module-boundaries": "tsx scripts/verify-module-boundaries.ts",
     "verify-translation-pairing": "tsx scripts/verify-translation-pairing.ts",
     "translate": "tsx scripts/translate.ts",
     "verify-translation-prompt": "tsx scripts/verify-translation-prompt.ts",

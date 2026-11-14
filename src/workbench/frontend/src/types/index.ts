@@ -1,0 +1,146 @@
+import type { ComfyDesktop2Bridge } from '@comfyorg/comfyui-desktop-bridge-types'
+
+import type { DesktopHostAuthBridge } from '@/platform/auth/desktopHost/desktopHostAuthBridge'
+import type {
+  GetEmbeddingsResponse as EmbeddingsResponse,
+  GetExtensionsResponse as ExtensionsResponse
+} from '@comfyorg/ingest-types'
+import type {
+  DeviceStats,
+  NodeError,
+  PromptFailureResponse,
+  PromptResponse,
+  SystemStats,
+  UserConfigResponse,
+  UserData,
+  UserDataFullInfo
+} from '@/platform/remote/comfyui/types'
+import type {
+  LogEntry,
+  LogsRawResponse,
+  TerminalSize
+} from '@/platform/remote/comfyui/execution/types'
+import type { Settings } from '@/platform/settings/types'
+import type { ComfyApp } from '@/types/comfy'
+import type {
+  ContextMenu,
+  DragAndScale,
+  LGraph,
+  LGraphBadge,
+  LGraphCanvas,
+  LGraphGroup,
+  LGraphNode,
+  LLink,
+  LiteGraph
+} from '@/lib/litegraph/src/litegraph'
+
+import type {
+  BottomPanelExtension,
+  CommandManager,
+  ExtensionManager,
+  SidebarTabExtension,
+  ToastAction,
+  ToastManager,
+  ToastMessageOptions,
+  ToastOptions
+} from './extensionTypes'
+import type { ToastId } from './toastId'
+
+export type { NodeId, SerializedNodeId } from './nodeId'
+export { toNodeId, parseNodeId } from './nodeId'
+export type { LinkId } from './linkId'
+export { toLinkId } from './linkId'
+export type { RerouteId } from './rerouteId'
+export { toRerouteId } from './rerouteId'
+export type { SlotDirection, SlotId, SlotIndex } from './slotId'
+export { slotId } from './slotId'
+export type { ComfyExtension } from './comfy'
+export type { ComfyDesktop2Bridge } from '@comfyorg/comfyui-desktop-bridge-types'
+export type { ComfyApi } from '@/scripts/api'
+export type { ComfyApp } from '@/types/comfy'
+export type { ComfyNodeDef } from '@/schemas/nodeDefSchema'
+export type { InputSpec } from '@/schemas/nodeDefSchema'
+export type {
+  NodeLocatorId,
+  NodeExecutionId,
+  isNodeLocatorId,
+  isNodeExecutionId,
+  parseNodeLocatorId,
+  createNodeLocatorId,
+  parseNodeExecutionId,
+  createNodeExecutionId
+} from './nodeIdentification'
+export type { DOMWidget, DOMWidgetOptions } from '@/scripts/domWidget'
+export type {
+  EmbeddingsResponse,
+  ExtensionsResponse,
+  PromptResponse,
+  PromptFailureResponse,
+  NodeError,
+  Settings,
+  DeviceStats,
+  SystemStats,
+  UserConfigResponse as User,
+  UserData,
+  UserDataFullInfo,
+  TerminalSize,
+  LogEntry,
+  LogsRawResponse
+}
+export type {
+  SidebarTabExtension,
+  BottomPanelExtension,
+  ToastManager,
+  ExtensionManager,
+  CommandManager,
+  ToastAction,
+  ToastId,
+  ToastMessageOptions,
+  ToastOptions
+}
+
+interface CapturedMessages {
+  clientFeatureFlags: { type: string; data: Record<string, unknown> } | null
+  serverFeatureFlags: Record<string, unknown> | null
+}
+
+interface AppReadiness {
+  featureFlagsReceived: boolean
+  apiInitialized: boolean
+  appInitialized: boolean
+}
+
+declare global {
+  interface Window {
+    /** For use by extensions and in the browser console. Where possible, import `app` from '@/scripts/app' instead. */
+    app?: ComfyApp
+
+    /** For use by extensions and in the browser console. Where possible, import `app` and access via `app.graph` instead. */
+    graph?: unknown
+
+    LiteGraph?: typeof LiteGraph
+    LGraph?: typeof LGraph
+    LLink?: typeof LLink
+    LGraphNode?: typeof LGraphNode
+    LGraphGroup?: typeof LGraphGroup
+    DragAndScale?: typeof DragAndScale
+    LGraphCanvas?: typeof LGraphCanvas
+    ContextMenu?: typeof ContextMenu
+    LGraphBadge?: typeof LGraphBadge
+
+    /** For use in tests to capture WebSocket messages */
+    __capturedMessages?: CapturedMessages
+
+    /** For use in tests to track app initialization state */
+    __appReadiness?: AppReadiness
+
+    /**
+     * Set to `true` by Desktop builds predating the bridge's `isRemote()`;
+     * local installs of those builds leave it unset.
+     * @deprecated Superseded by `ComfyDesktop2Bridge.isRemote()`.
+     */
+    __comfyDesktop2Remote?: boolean
+
+    __comfyDesktop2?: ComfyDesktop2Bridge & { Auth?: DesktopHostAuthBridge }
+  }
+}

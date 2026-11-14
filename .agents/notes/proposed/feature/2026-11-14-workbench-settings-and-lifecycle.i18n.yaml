@@ -1,0 +1,37 @@
+# Bilingual-pair consistency record for .agents/notes/proposed/feature/2026-11-14-workbench-settings-and-lifecycle.md ↔ .agents/notes/proposed/feature/2026-11-14-workbench-settings-and-lifecycle.zh.md: per heading
+# section, a hash of its English and Chinese blocks outside code blocks and generated regions.
+# After editing either side, bring the other along and re-record with:
+#   pnpm run verify-translation-pairing --write .agents/notes/proposed/feature/2026-11-14-workbench-settings-and-lifecycle.md
+/agent-note-one-config-file-one-workspace-explicit-restart:
+  en: 87e6a43f2d4d119e
+  zh: 61518247f0e90f40
+/agent-note-one-config-file-one-workspace-explicit-restart/problem:
+  en: 9e37dafc43d55d63
+  zh: d824b299d06060f4
+/agent-note-one-config-file-one-workspace-explicit-restart/proposal:
+  en: 58e7f671454a3d89
+  zh: e717c06e8400bebe
+/agent-note-one-config-file-one-workspace-explicit-restart/proposal/location-and-schema:
+  en: b899b9ef8cabcd0a
+  zh: dea992f38db83cba
+/agent-note-one-config-file-one-workspace-explicit-restart/proposal/processes-and-ports:
+  en: b49de41bbb4bebcc
+  zh: 00a5481e28158c7a
+/agent-note-one-config-file-one-workspace-explicit-restart/proposal/lifecycle:
+  en: a2feaad260d5f192
+  zh: 62b637d4542a55c0
+/agent-note-one-config-file-one-workspace-explicit-restart/proposal/settings-and-save-semantics:
+  en: bf040d81a9d7b6e9
+  zh: 15ac4618ab0d72b8
+/agent-note-one-config-file-one-workspace-explicit-restart/proposal/language-and-diagnostics:
+  en: f7e2633661e977fe
+  zh: 40b3ea2c82eca226
+/agent-note-one-config-file-one-workspace-explicit-restart/alternatives-considered:
+  en: 7303ace52666fb0f
+  zh: dbbb9872fbe57f63
+/agent-note-one-config-file-one-workspace-explicit-restart/acceptance-criteria:
+  en: 18ae393a375bbbf7
+  zh: de566082da05fd6e
+/agent-note-one-config-file-one-workspace-explicit-restart/risks:
+  en: 27fc1dfca361c247
+  zh: 408bd603fc89a8aa

@@ -1,0 +1,276 @@
+<script setup lang="ts">
+import type { MenuItem } from '@/components/ui/menu/types'
+import { useFullscreen, usePointerSwipe } from '@vueuse/core'
+import { computed, ref, useTemplateRef } from 'vue'
+import { useI18n } from 'vue-i18n'
+
+import AssetsSidebarTab from '@/components/sidebar/tabs/AssetsSidebarTab.vue'
+import CurrentUserButton from '@/components/topbar/CurrentUserButton.vue'
+import Button from '@/components/ui/button/Button.vue'
+import Menu from '@/components/ui/menu/Menu.vue'
+import MenuRadioGroup from '@/components/ui/menu/MenuRadioGroup.vue'
+import { useCurrentUser } from '@/composables/auth/useCurrentUser'
+import { APP_MODE_FEEDBACK_FORM_URL } from '@/platform/surveys/appModeFeedback'
+import { useWorkflowService } from '@/platform/workflow/core/services/workflowService'
+import { useWorkflowStore } from '@/platform/workflow/management/stores/workflowStore'
+import { useCanvasStore } from '@/renderer/core/canvas/canvasStore'
+import LinearControls from '@/renderer/extensions/linearMode/LinearControls.vue'
+import LinearPreview from '@/renderer/extensions/linearMode/LinearPreview.vue'
+import MobileError from '@/renderer/extensions/linearMode/MobileError.vue'
+import { useColorPaletteService } from '@/services/colorPaletteService'
+import { useErrorOverlayState } from '@/components/error/useErrorOverlayState'
+import { useQueueStore } from '@/stores/queueStore'
+import { useMenuItemStore } from '@/stores/menuItemStore'
+import { useColorPaletteStore } from '@/stores/workspace/colorPaletteStore'
+import { cn } from '@comfyorg/tailwind-utils'
+
+const tabs = [
+  ['linearMode.mobileControls', 'icon-[lucide--play]', 'control'],
+  ['nodeHelpPage.outputs', 'icon-[comfy--image-ai-edit]', 'preview'],
+  ['sideToolbar.assets', 'icon-[lucide--images]', 'output']
+]
+
+const canvasStore = useCanvasStore()
+const colorPaletteService = useColorPaletteService()
+const colorPaletteStore = useColorPaletteStore()
+const { isLoggedIn } = useCurrentUser()
+const { isVisible: isErrorOverlayVisible } = useErrorOverlayState()
+const { t } = useI18n()
+const { commandIdToMenuItem } = useMenuItemStore()
+const queueStore = useQueueStore()
+const workflowService = useWorkflowService()
+const workflowStore = useWorkflowStore()
+const { toggle: toggleFullscreen } = useFullscreen(undefined, {
+  autoExit: true
+})
+
+const activeIndex = ref(1)
+const sliderPaneRef = useTemplateRef('sliderPaneRef')
+const sliderWidth = computed(() => sliderPaneRef.value?.offsetWidth)
+
+const { distanceX, isSwiping } = usePointerSwipe(sliderPaneRef, {
+  disableTextSelect: true,
+  onSwipeEnd() {
+    if (
+      !sliderWidth.value ||
+      Math.abs(distanceX.value) / sliderWidth.value < 0.4
+    )
+      return
+    if (distanceX.value < 0)
+      activeIndex.value = Math.max(activeIndex.value - 1, 0)
+    else activeIndex.value = Math.min(activeIndex.value + 1, tabs.length - 1)
+  }
+})
+
+const translate = computed(() => {
+  const slideOffset =
+    isSwiping.value && sliderWidth.value
+      ? distanceX.value / sliderWidth.value
+      : 0
+  const totalOffset = slideOffset + activeIndex.value
+  return `${totalOffset * -100}vw`
+})
+
+function onClick(index: number) {
+  if (Math.abs(distanceX.value) > 30) return
+  activeIndex.value = index
+}
+
+const workflowOptions = computed(() =>
+  workflowStore.openWorkflows.map((workflow) => ({
+    value: workflow.path,
+    label: workflow.filename,
+    icon: workflow.activeState?.extra?.linearMode
+      ? 'icon-[lucide--panels-top-left]'
+      : undefined
+  }))
+)
+const activeWorkflowPath = computed({
+  get: () => workflowStore.activeWorkflow?.path ?? '',
+  set: (path: string) => {
+    const workflow = workflowStore.getWorkflowByPath(path)
+    if (workflow) void workflowService.openWorkflow(workflow)
+  }
+})
+
+const menuEntries = computed<MenuItem[]>(() => [
+  {
+    label: t('icon.file'),
+    items: [
+      commandIdToMenuItem('Comfy.RenameWorkflow'),
+      commandIdToMenuItem('Comfy.DuplicateWorkflow'),
+      { separator: true },
+      commandIdToMenuItem('Comfy.SaveWorkflow'),
+      commandIdToMenuItem('Comfy.SaveWorkflowAs'),
+      { separator: true },
+      commandIdToMenuItem('Comfy.ExportWorkflow'),
+      commandIdToMenuItem('Comfy.ExportWorkflowAPI')
+    ]
+  },
+  {
+    label: t('g.edit'),
+    items: [
+      commandIdToMenuItem('Comfy.Undo'),
+      commandIdToMenuItem('Comfy.Redo'),
+      { separator: true },
+      commandIdToMenuItem('Comfy.RefreshNodeDefinitions'),
+      commandIdToMenuItem('Comfy.Memory.UnloadModels'),
+      commandIdToMenuItem('Comfy.Memory.UnloadModelsAndExecutionCache')
+    ]
+  },
+  {
+    label: t('linearMode.enterNodeGraph'),
+    icon: 'icon-[comfy--workflow]',
+    new: true,
+    command: () => (canvasStore.linearMode = false)
+  },
+  { separator: true },
+  {
+    label: t('menu.theme'),
+    items: colorPaletteStore.palettes.map((palette) => ({
+      label: palette.name,
+      icon:
+        colorPaletteStore.activePaletteId === palette.id
+          ? 'icon-[lucide--check]'
+          : '',
+      command: () => colorPaletteService.loadColorPalette(palette.id)
+    }))
+  },
+  { separator: true },
+  {
+    ...commandIdToMenuItem('Comfy.ShowSettingsDialog'),
+    label: t('menu.settings')
+  },
+  {
+    label: t('linearMode.giveFeedback'),
+    icon: 'icon-[lucide--clipboard-pen]',
+    command: () =>
+      window.open(APP_MODE_FEEDBACK_FORM_URL, '_blank', 'noopener,noreferrer')
+  },
+  {
+    label: t('menu.fullscreen'),
+    icon: 'icon-[lucide--fullscreen]',
+    command: toggleFullscreen
+  }
+])
+</script>
+<template>
+  <section
+    class="absolute flex size-full flex-col bg-secondary-background"
+    data-testid="linear-mobile"
+  >
+    <header
+      class="flex h-16 w-full items-center gap-3 border-b border-border-subtle bg-base-background px-4 py-3"
+    >
+      <Menu :items="menuEntries" :label="$t('linearMode.appModeToolbar.apps')">
+        <template #trigger>
+          <Button
+            size="icon"
+            icon="icon-[lucide--menu]"
+            :aria-label="$t('g.more')"
+          />
+        </template>
+      </Menu>
+      <Menu>
+        <template #trigger>
+          <Button
+            variant="secondary"
+            class="min-w-0 flex-1"
+            data-testid="linear-mobile-workflows"
+            icon="icon-[lucide--panels-top-left]"
+          >
+            <span
+              class="min-w-0 flex-1 truncate"
+              v-text="workflowStore.activeWorkflow?.filename"
+            />
+            <i
+              class="icon-[lucide--chevron-down] size-4 shrink-0"
+              aria-hidden="true"
+            />
+          </Button>
+        </template>
+        <MenuRadioGroup
+          v-model="activeWorkflowPath"
+          :options="workflowOptions"
+        />
+      </Menu>
+      <CurrentUserButton v-if="isLoggedIn" :show-arrow="false" />
+    </header>
+    <div class="size-full rounded-b-4xl contain-content">
+      <div
+        :class="
+          cn('relative size-full', !isSwiping && 'transition-[translate]')
+        "
+        :style="{ translate }"
+      >
+        <div
+          id="mobile-app-control-panel"
+          class="absolute h-full w-screen overflow-y-auto contain-size"
+          role="tabpanel"
+          :aria-hidden="activeIndex !== 0"
+          aria-labelledby="mobile-app-control-tab"
+          :inert="activeIndex !== 0"
+        >
+          <LinearControls mobile @navigate-outputs="activeIndex = 1" />
+        </div>
+        <div
+          id="mobile-app-preview-panel"
+          class="absolute top-0 left-[100vw] flex h-full w-screen flex-col bg-base-background"
+          role="tabpanel"
+          :aria-hidden="activeIndex !== 1"
+          aria-labelledby="mobile-app-preview-tab"
+          :inert="activeIndex !== 1"
+        >
+          <MobileError
+            v-if="isErrorOverlayVisible"
+            @navigate-controls="activeIndex = 0"
+          />
+          <LinearPreview v-else mobile @navigate-controls="activeIndex = 0" />
+        </div>
+        <AssetsSidebarTab
+          id="mobile-app-output-panel"
+          class="absolute top-0 left-[200vw] h-full w-screen bg-base-background"
+          role="tabpanel"
+          :aria-hidden="activeIndex !== 2"
+          aria-labelledby="mobile-app-output-tab"
+          :inert="activeIndex !== 2"
+          :closable="false"
+        />
+      </div>
+    </div>
+    <div
+      ref="sliderPaneRef"
+      class="flex h-22 w-full items-center justify-around gap-4 bg-secondary-background p-4"
+      role="tablist"
+    >
+      <Button
+        v-for="([label, icon, id], index) in tabs"
+        :id="`mobile-app-${id}-tab`"
+        :key="label"
+        :variant="index === activeIndex ? 'secondary' : 'muted-textonly'"
+        class="h-14 grow flex-col"
+        role="tab"
+        :aria-selected="index === activeIndex"
+        :aria-controls="`mobile-app-${id}-panel`"
+        @click="onClick(index)"
+      >
+        <div class="relative size-4">
+          <i :class="cn('size-4', icon)" />
+          <div
+            v-if="index === 1 && isErrorOverlayVisible"
+            class="absolute -top-1 -right-1 size-2 rounded-full bg-error"
+          />
+          <div
+            v-else-if="
+              index === 1 &&
+              (queueStore.runningTasks.length > 0 ||
+                queueStore.pendingTasks.length > 0)
+            "
+            class="absolute -top-1 -right-1 size-2 animate-pulse rounded-full bg-primary-background"
+          />
+        </div>
+        {{ t(label) }}
+      </Button>
+    </div>
+  </section>
+</template>

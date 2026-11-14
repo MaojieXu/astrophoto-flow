@@ -1,0 +1,617 @@
+import type { Locator, Page } from '@playwright/test'
+import { expect } from '@playwright/test'
+
+import type { ComfyMouse } from '@e2e/fixtures/ComfyMouse'
+import type { WorkspaceStore } from '@e2e/types/globals'
+import { TestIds } from '@e2e/fixtures/selectors'
+import { ToastHelper } from '@e2e/fixtures/helpers/ToastHelper'
+
+export class SidebarTab {
+  public readonly tabButton: Locator
+  public readonly selectedTabButton: Locator
+  public readonly panelHeader: Locator
+  public readonly closeButton: Locator
+  public readonly panel: Locator
+
+  constructor(
+    public readonly page: Page,
+    public readonly tabId: string
+  ) {
+    this.tabButton = page.getByTestId(TestIds.sidebar.tabButton(tabId))
+    this.selectedTabButton = this.tabButton.and(
+      page.locator('.side-bar-button-selected')
+    )
+    const sidebarContent = page.locator('.sidebar-content-container')
+    this.panel = page.getByRole('complementary')
+    this.panelHeader = sidebarContent.locator('.comfy-vue-side-bar-header')
+    this.closeButton = sidebarContent.getByTestId(TestIds.sidebar.closeButton)
+  }
+
+  async open() {
+    if (await this.selectedTabButton.isVisible()) {
+      return
+    }
+    await this.tabButton.click()
+  }
+  async close() {
+    await this.tabButton.click()
+  }
+
+  async resize(comfyMouse: ComfyMouse, deltaX: number, startOffset = 0) {
+    const resizeHandle = this.page.locator(
+      '.side-bar-panel + [role="separator"], [role="separator"]:has(+ .side-bar-panel)'
+    )
+    await expect(resizeHandle).toBeVisible()
+    const box = await resizeHandle.boundingBox()
+    if (!box) throw new Error('Sidebar resize handle has no bounding box')
+    const from = {
+      x: box.x + box.width / 2 + startOffset,
+      y: box.y + box.height / 2
+    }
+    await comfyMouse.dragAndDrop(
+      from,
+      { x: from.x + deltaX, y: from.y },
+      {
+        steps: 10
+      }
+    )
+  }
+}
+
+export class NodeLibrarySidebarTab extends SidebarTab {
+  public readonly bookmarkTree: Locator
+  public readonly newFolderButton: Locator
+  public readonly nodeLibrarySearchBoxInput: Locator
+  public readonly nodeLibraryTree: Locator
+  public readonly nodePreview: Locator
+  public readonly tabContainer: Locator
+
+  constructor(public override readonly page: Page) {
+    super(page, 'node-library')
+    this.tabContainer = page.locator('.sidebar-content-container')
+    this.bookmarkTree = page.getByTestId(TestIds.sidebar.nodeLibraryBookmarks)
+    this.newFolderButton = this.tabContainer.locator('.new-folder-button')
+    this.nodeLibrarySearchBoxInput = page.getByPlaceholder('Search Nodes...')
+    this.nodeLibraryTree = page.getByTestId(TestIds.sidebar.nodeLibrary)
+    this.nodePreview = page.getByTestId(TestIds.tree.itemPreview)
+  }
+
+  override async open() {
+    await super.open()
+    await this.nodeLibraryTree.waitFor({ state: 'visible' })
+  }
+
+  override async close() {
+    await this.tabButton.click()
+    await this.nodeLibraryTree.waitFor({ state: 'hidden' })
+  }
+
+  getBookmarkedNode(nodeName: string) {
+    return this.getNode(nodeName).and(this.bookmarkTree.getByRole('treeitem'))
+  }
+
+  getFolder(folderName: string) {
+    return this.getTreeItem(folderName, 'folder')
+  }
+
+  getFolderIcon(folderName: string) {
+    return this.getFolder(folderName)
+      .and(this.bookmarkTree.getByRole('treeitem'))
+      .locator('.tree-explorer-node-icon')
+  }
+
+  getNode(nodeName: string) {
+    return this.getTreeItem(nodeName, 'node')
+  }
+
+  getNodeInParentFolder(nodeName: string, folderName: string) {
+    return this.getNode(nodeName).and(
+      this.nodeLibraryTree.locator(`[data-parent-label="${folderName}"]`)
+    )
+  }
+
+  private getTreeItem(label: string, type: 'folder' | 'node') {
+    return this.tabContainer
+      .getByRole('treeitem', { name: label, exact: true })
+      .and(this.tabContainer.locator(`[data-tree-node-type="${type}"]`))
+  }
+}
+
+export class NodeLibrarySidebarTabV2 extends SidebarTab {
+  public readonly searchInput: Locator
+  public readonly sidebarContent: Locator
+  public readonly allTab: Locator
+  public readonly essentialsTab: Locator
+  public readonly sortButton: Locator
+  public readonly nodePreview: Locator
+  public readonly nodePreviewInputs: Locator
+  public readonly nodePreviewBody: Locator
+
+  constructor(public override readonly page: Page) {
+    super(page, 'node-library')
+    this.sidebarContent = page.locator('.sidebar-content-container')
+    this.searchInput = this.sidebarContent.getByPlaceholder('Search Nodes...')
+    this.allTab = this.getTab('All nodes')
+    this.essentialsTab = this.getTab('Essentials')
+    this.sortButton = this.sidebarContent.getByRole('button', { name: 'Sort' })
+    this.nodePreview = page.getByTestId(TestIds.sidebar.nodePreviewCard)
+    this.nodePreviewInputs = this.nodePreview.getByTestId(
+      TestIds.sidebar.nodePreviewInputs
+    )
+    this.nodePreviewBody = this.nodePreview.getByTestId(
+      TestIds.sidebar.nodePreviewBody
+    )
+  }
+
+  getTab(name: string) {
+    return this.sidebarContent.getByRole('tab', { name, exact: true })
+  }
+
+  getFolder(folderName: string) {
+    return this.sidebarContent
+      .getByRole('treeitem', { name: folderName })
+      .first()
+  }
+
+  getNode(nodeName: string) {
+    return this.getNodes(nodeName).first()
+  }
+
+  getNodes(nodeName: string) {
+    return this.sidebarContent.getByRole('treeitem', { name: nodeName })
+  }
+
+  async expandFolder(folderName: string) {
+    const folder = this.getFolder(folderName)
+    const isExpanded = await folder.getAttribute('aria-expanded')
+    if (isExpanded !== 'true') {
+      await folder.click()
+    }
+  }
+
+  override async open() {
+    await super.open()
+    await this.searchInput.waitFor({ state: 'visible' })
+  }
+}
+
+export class WorkflowsSidebarTab extends SidebarTab {
+  public readonly activeWorkflowLabel: Locator
+  public readonly refreshButton: Locator
+  public readonly root: Locator
+  public readonly searchInput: Locator
+
+  constructor(public override readonly page: Page) {
+    super(page, 'workflows')
+    this.root = page.getByTestId(TestIds.sidebar.workflows)
+    this.activeWorkflowLabel = this.root
+      .locator('.comfyui-workflows-open')
+      .getByRole('treeitem', { selected: true })
+      .locator('.node-label')
+    this.refreshButton = this.root.getByTestId(
+      TestIds.sidebar.workflowsRefreshButton
+    )
+    this.searchInput = this.root.getByRole('combobox').first()
+  }
+
+  async getOpenedWorkflowNames() {
+    return await this.root
+      .locator('.comfyui-workflows-open .node-label')
+      .allInnerTexts()
+  }
+
+  async getActiveWorkflowName() {
+    return await this.activeWorkflowLabel.innerText()
+  }
+
+  async getTopLevelSavedWorkflowNames() {
+    return await this.root
+      .locator('.comfyui-workflows-browse .node-label')
+      .allInnerTexts()
+  }
+
+  async switchToWorkflow(workflowName: string) {
+    const workflowLocator = this.getOpenedItem(workflowName)
+    await workflowLocator.click()
+  }
+
+  getOpenedItem(name: string) {
+    return this.root.locator('.comfyui-workflows-open .node-label', {
+      hasText: name
+    })
+  }
+
+  getPersistedItem(name: string) {
+    return this.root.locator('.comfyui-workflows-browse .node-label', {
+      hasText: name
+    })
+  }
+
+  async renameWorkflow(locator: Locator, newName: string) {
+    await locator.click({ button: 'right' })
+    await this.page
+      .getByRole('menuitem', { name: 'Rename', exact: true })
+      .click()
+    await this.page.keyboard.type(newName)
+    await this.page.keyboard.press('Enter')
+
+    // Wait for workflow service to finish renaming
+    await this.page.waitForFunction(
+      () =>
+        !(window.app?.extensionManager as WorkspaceStore | undefined)?.workflow
+          .isBusy,
+      undefined,
+      { timeout: 3000 }
+    )
+  }
+
+  async insertWorkflow(locator: Locator) {
+    await locator.click({ button: 'right' })
+    await this.page
+      .getByRole('menuitem', { name: 'Insert', exact: true })
+      .click()
+  }
+}
+
+export class ModelLibrarySidebarTab extends SidebarTab {
+  public readonly folderNodes: Locator
+  public readonly leafNodes: Locator
+  public readonly loadAllFoldersButton: Locator
+  public readonly modelPreview: Locator
+  public readonly modelTree: Locator
+  public readonly refreshButton: Locator
+  public readonly searchInput: Locator
+
+  constructor(public override readonly page: Page) {
+    super(page, 'model-library')
+    this.modelTree = page.locator('.model-lib-tree-explorer')
+    this.folderNodes = this.modelTree
+      .getByRole('treeitem')
+      .and(this.modelTree.locator('[data-tree-node-type="folder"]'))
+    this.leafNodes = this.modelTree
+      .getByRole('treeitem')
+      .and(this.modelTree.locator('[data-tree-node-type="node"]'))
+    this.loadAllFoldersButton = page.getByRole('button', {
+      name: 'Load All Folders'
+    })
+    this.modelPreview = page.getByTestId(TestIds.tree.itemPreview)
+    this.refreshButton = page.getByRole('button', { name: 'Refresh' })
+    this.searchInput = page.getByPlaceholder('Search Models...')
+  }
+
+  override async open() {
+    await super.open()
+    await this.modelTree.waitFor({ state: 'visible' })
+  }
+
+  getFolderByLabel(folderName: string) {
+    return this.folderNodes
+      .and(this.modelTree.getByRole('treeitem', { name: folderName }))
+      .first()
+  }
+
+  getFolderLeafCount(folderName: string) {
+    return this.getFolderByLabel(folderName).getByTestId(TestIds.tree.leafCount)
+  }
+
+  getLeafByLabel(leafName: string) {
+    return this.getLeavesByLabel(leafName).first()
+  }
+
+  getLeavesByLabel(leafName: string) {
+    return this.leafNodes.and(
+      this.modelTree.getByRole('treeitem', { name: leafName })
+    )
+  }
+
+  getLeavesInFolder(leafName: string, folderName: string) {
+    return this.getLeavesByLabel(leafName).and(
+      this.modelTree.locator(`[data-parent-label="${folderName}"]`)
+    )
+  }
+}
+
+type MediaFilterKind = 'image' | 'video' | 'audio' | '3d'
+type MediaFilterLabel = 'Image' | 'Video' | 'Audio' | '3D'
+
+function getMediaFilterLabel(
+  filter: MediaFilterKind | MediaFilterLabel
+): MediaFilterLabel {
+  switch (filter) {
+    case 'image':
+      return 'Image'
+    case 'video':
+      return 'Video'
+    case 'audio':
+      return 'Audio'
+    case '3d':
+      return '3D'
+    default:
+      return filter
+  }
+}
+
+export class AssetsSidebarTab extends SidebarTab {
+  // --- Tab navigation ---
+  public readonly generatedTab: Locator
+  public readonly importedTab: Locator
+
+  // --- Empty state ---
+  public readonly emptyStateMessage: Locator
+
+  // --- Search & filter ---
+  public readonly searchInput: Locator
+  public readonly settingsButton: Locator
+  public readonly filterButton: Locator
+  public readonly filterSearchInput: Locator
+
+  // --- Filter menu (cloud-only) ---
+  public readonly mediaTypeFilterMenuItem: Locator
+  public readonly dateFilterMenuItem: Locator
+  public readonly filterImageCheckbox: Locator
+  public readonly filterVideoCheckbox: Locator
+  public readonly filterAudioCheckbox: Locator
+  public readonly filter3DCheckbox: Locator
+
+  // --- View mode ---
+  public readonly listViewOption: Locator
+  public readonly gridSmallOption: Locator
+  public readonly gridLargeOption: Locator
+  public readonly gridItems: Locator
+
+  // --- Sort options (cloud-only, shown inside settings popover) ---
+  public readonly sortNewestFirst: Locator
+  public readonly sortOldestFirst: Locator
+  public readonly sortAToZ: Locator
+  public readonly sortZToA: Locator
+  public readonly sortLongestFirst: Locator
+  public readonly sortFastestFirst: Locator
+
+  // --- Asset cards ---
+  public readonly assetCards: Locator
+  public readonly selectedCards: Locator
+
+  // --- List view items ---
+  public readonly listViewItems: Locator
+
+  // --- Output stacks (a job's extra outputs) ---
+  public readonly stackToggles: Locator
+
+  // --- Selection footer ---
+  public readonly selectionFooter: Locator
+  public readonly selectionCountButton: Locator
+  public readonly deselectAllButton: Locator
+  public readonly deleteSelectedButton: Locator
+  public readonly downloadSelectedButton: Locator
+
+  // --- Folder view ---
+  public readonly backToAssetsButton: Locator
+
+  // --- Loading ---
+  public readonly skeletonLoaders: Locator
+
+  private readonly toast: ToastHelper
+
+  constructor(public override readonly page: Page) {
+    super(page, 'assets')
+    this.generatedTab = page.getByRole('tab', { name: 'Generated' })
+    this.importedTab = page.getByRole('tab', { name: 'Imported' })
+    this.emptyStateMessage = page.getByText(
+      'Upload files or generate content to see them here'
+    )
+    this.searchInput = page.getByPlaceholder('Search Assets...')
+    this.settingsButton = page.getByRole('button', { name: 'View settings' })
+    this.filterButton = page.getByRole('button', { name: 'Filter by' })
+    this.filterSearchInput = page.getByRole('textbox', { name: 'Filter by' })
+    this.mediaTypeFilterMenuItem = page.getByRole('menuitem', {
+      name: /Media type/
+    })
+    this.dateFilterMenuItem = page.getByRole('menuitem', { name: 'Date' })
+    this.filterImageCheckbox = page.getByRole('menuitemcheckbox', {
+      name: 'Image'
+    })
+    this.filterVideoCheckbox = page.getByRole('menuitemcheckbox', {
+      name: 'Video'
+    })
+    this.filterAudioCheckbox = page.getByRole('menuitemcheckbox', {
+      name: 'Audio'
+    })
+    this.filter3DCheckbox = page.getByRole('menuitemcheckbox', { name: '3D' })
+    this.listViewOption = page.getByText('List view')
+    this.gridSmallOption = page.getByText('Grid (small)')
+    this.gridLargeOption = page.getByText('Grid (large)')
+    this.gridItems = page.locator('[data-virtual-grid-item]')
+    this.sortNewestFirst = page.getByText('Newest first')
+    this.sortOldestFirst = page.getByText('Oldest first')
+    this.sortAToZ = page.getByText('Name (A → Z)')
+    this.sortZToA = page.getByText('Name (Z → A)')
+    this.sortLongestFirst = page.getByText('Generation time (longest first)')
+    this.sortFastestFirst = page.getByText('Generation time (fastest first)')
+    this.assetCards = page.locator(
+      '.sidebar-content-container [data-asset-id][data-selected]'
+    )
+    this.selectedCards = page.locator(
+      '.sidebar-content-container [data-asset-id][data-selected="true"]'
+    )
+    this.listViewItems = page.locator(
+      '.sidebar-content-container [role="button"][tabindex="0"]'
+    )
+    this.stackToggles = page
+      .locator('.sidebar-content-container')
+      .getByRole('button', { name: 'See more outputs' })
+    this.selectionFooter = page.getByTestId('assets-selection-bar')
+    this.selectionCountButton = page.getByText(/\d+ selected/)
+    this.deselectAllButton = page.getByTestId('assets-deselect-selected')
+    this.deleteSelectedButton = page.getByTestId('assets-delete-selected')
+    this.downloadSelectedButton = page.getByTestId('assets-download-selected')
+    this.backToAssetsButton = page.getByRole('button', {
+      name: 'Back to all assets'
+    })
+    this.skeletonLoaders = page.locator(
+      '.sidebar-content-container .animate-pulse'
+    )
+    this.toast = new ToastHelper(page)
+  }
+
+  emptyStateTitle(title: string) {
+    return this.page.getByText(title)
+  }
+
+  filterCheckbox(filter: MediaFilterKind | MediaFilterLabel) {
+    return this.page.getByRole('menuitemcheckbox', {
+      name: getMediaFilterLabel(filter)
+    })
+  }
+
+  dateFilterOption(label: string) {
+    return this.page.getByRole('menuitemradio', { name: label })
+  }
+
+  removeFilterButton(label: string) {
+    return this.page.getByRole('button', {
+      name: `Remove ${label} filter`
+    })
+  }
+
+  getAssetCardByName(name: string) {
+    return this.assetCards.filter({ hasText: name })
+  }
+
+  async getFirstGridItemWidth() {
+    return await this.gridItems.first().evaluate((element) => {
+      return element.getBoundingClientRect().width
+    })
+  }
+
+  contextMenuItem(label: string) {
+    return this.page.getByRole('menu').getByRole('menuitem', { name: label })
+  }
+
+  override async open({ waitForAssets = true } = {}) {
+    // Remove any toast notifications that may overlay the sidebar button
+    await this.toast.closeToasts()
+    await super.open()
+    await this.generatedTab.waitFor({ state: 'visible' })
+    if (waitForAssets) {
+      await this.waitForAssets()
+    }
+  }
+
+  async switchToImported() {
+    await this.toast.closeToasts()
+    await this.importedTab.click()
+    await expect(this.importedTab).toHaveAttribute('aria-selected', 'true')
+  }
+
+  async switchToGenerated() {
+    await this.toast.closeToasts()
+    await this.generatedTab.click()
+    await expect(this.generatedTab).toHaveAttribute('aria-selected', 'true')
+  }
+
+  /**
+   * Expand a job's output stack and wait for its extra outputs to render.
+   *
+   * The panel groups a job's outputs into one card and hides the rest behind
+   * this control, so a nested output is unreachable until it is expanded.
+   * Resolves the children through the same path the UI uses, so a spec must
+   * also route the job's assets endpoint.
+   */
+  async expandOutputStack(index = 0) {
+    const before = await this.listViewItems.count()
+    await this.stackToggles.nth(index).click()
+    await expect
+      .poll(async () => this.listViewItems.count())
+      .toBeGreaterThan(before)
+  }
+
+  /** A list row by its rendered filename, which is how a user identifies it. */
+  listRowByName(name: string): Locator {
+    return this.listViewItems.filter({ hasText: name })
+  }
+
+  async openSettingsMenu() {
+    await this.toast.closeToasts()
+    await this.settingsButton.click()
+    await expect(
+      this.listViewOption
+        .or(this.gridSmallOption)
+        .or(this.gridLargeOption)
+        .first()
+    ).toBeVisible()
+  }
+
+  /**
+   * Dismiss the view-settings popover. Choosing a view mode leaves it open, and
+   * it overlays the asset rows, so anything that clicks a row must close it
+   * first or the click lands on the popover.
+   */
+  async closeSettingsMenu() {
+    if (!(await this.gridLargeOption.isVisible())) return
+    // Escape does not dismiss this popover; toggling its trigger does.
+    await this.settingsButton.click()
+    await expect(this.gridLargeOption).toBeHidden()
+  }
+
+  async openFilterMenu() {
+    await this.toast.closeToasts()
+    await this.filterButton.click()
+    await expect(this.mediaTypeFilterMenuItem).toBeVisible()
+  }
+
+  async closeFilterMenu() {
+    for (let depth = 0; depth < 2; depth++) {
+      if ((await this.filterButton.getAttribute('aria-expanded')) !== 'true') {
+        return
+      }
+      await this.page.keyboard.press('Escape')
+    }
+    await expect(this.filterButton).toHaveAttribute('aria-expanded', 'false')
+  }
+
+  async openMediaTypeFilterMenu() {
+    if (await this.filterCheckbox('Image').isVisible()) {
+      return
+    }
+    await this.mediaTypeFilterMenuItem.click()
+    await expect(this.filterCheckbox('Image')).toBeVisible()
+  }
+
+  async toggleMediaTypeFilter(
+    filter: MediaFilterKind | MediaFilterLabel
+  ): Promise<void> {
+    await this.openMediaTypeFilterMenu()
+    const checkbox = this.filterCheckbox(filter)
+    const before = await checkbox.getAttribute('aria-checked')
+    await checkbox.click()
+    const expected = before === 'true' ? 'false' : 'true'
+    await expect(checkbox).toHaveAttribute('aria-checked', expected)
+  }
+
+  async selectDateFilter(label: string): Promise<void> {
+    if (!(await this.dateFilterOption(label).isVisible())) {
+      await this.dateFilterMenuItem.click()
+    }
+    await this.dateFilterOption(label).click()
+  }
+
+  async getAssetCardOrder(): Promise<string[]> {
+    return await this.assetCards.allInnerTexts()
+  }
+
+  async rightClickAsset(name: string) {
+    const card = this.getAssetCardByName(name)
+    await card.click({ button: 'right' })
+    await this.page
+      .getByRole('menu')
+      .waitFor({ state: 'visible', timeout: 3000 })
+  }
+
+  async waitForAssets(count?: number) {
+    if (count !== undefined) {
+      await expect(this.assetCards).toHaveCount(count)
+    } else {
+      await this.assetCards.first().waitFor({ state: 'visible', timeout: 5000 })
+    }
+  }
+}

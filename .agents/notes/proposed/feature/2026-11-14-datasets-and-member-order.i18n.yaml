@@ -1,0 +1,40 @@
+# Bilingual-pair consistency record for .agents/notes/proposed/feature/2026-11-14-datasets-and-member-order.md ↔ .agents/notes/proposed/feature/2026-11-14-datasets-and-member-order.zh.md: per heading
+# section, a hash of its English and Chinese blocks outside code blocks and generated regions.
+# After editing either side, bring the other along and re-record with:
+#   pnpm run verify-translation-pairing --write .agents/notes/proposed/feature/2026-11-14-datasets-and-member-order.md
+/agent-note-a-dataset-is-an-ordered-set-of-subframes:
+  en: 5cd4e79eea971cfc
+  zh: f81b4b4d510c0437
+/agent-note-a-dataset-is-an-ordered-set-of-subframes/problem:
+  en: 1123b41eb1e02bab
+  zh: 7494eb6148c69030
+/agent-note-a-dataset-is-an-ordered-set-of-subframes/proposal:
+  en: cbb8dfab9a85fb97
+  zh: 319a0b183ea67c3e
+/agent-note-a-dataset-is-an-ordered-set-of-subframes/proposal/the-dataset-record:
+  en: 50b5aaad11ef9fbf
+  zh: 09b3358a43d2301f
+/agent-note-a-dataset-is-an-ordered-set-of-subframes/proposal/order:
+  en: 41597c64b16f03b4
+  zh: 2ffaabc2e10f6126
+/agent-note-a-dataset-is-an-ordered-set-of-subframes/proposal/one-dataset-per-asset:
+  en: df6a4938498865ba
+  zh: 74f749ef03a6e22c
+/agent-note-a-dataset-is-an-ordered-set-of-subframes/proposal/exposure-and-summaries:
+  en: 69405c6bc471a7f3
+  zh: de055e62d82438bf
+/agent-note-a-dataset-is-an-ordered-set-of-subframes/proposal/manifest:
+  en: b8e3260671e984f1
+  zh: efb8b5dec030a261
+/agent-note-a-dataset-is-an-ordered-set-of-subframes/proposal/directory-organization:
+  en: 07e500c64c88e379
+  zh: 0bab68b3d60444de
+/agent-note-a-dataset-is-an-ordered-set-of-subframes/alternatives-considered:
+  en: 8ed38bc03559875e
+  zh: f6ade2e279c3be85
+/agent-note-a-dataset-is-an-ordered-set-of-subframes/acceptance-criteria:
+  en: 13f3d605bebd87ca
+  zh: 7a66973675c7a134
+/agent-note-a-dataset-is-an-ordered-set-of-subframes/risks:
+  en: d75cb286514dd394
+  zh: 6d0e90cfa1758ef4

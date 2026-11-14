@@ -1,0 +1,16 @@
+# Bilingual-pair consistency record for docs/licensing.md ↔ docs/licensing.zh.md: per heading
+# section, a hash of its English and Chinese blocks outside code blocks and generated regions.
+# After editing either side, bring the other along and re-record with:
+#   pnpm run verify-translation-pairing --write docs/licensing.md
+/licensing:
+  en: a59e9169bdf56fbc
+  zh: 58b41db43a480e25
+/licensing/upstream-works:
+  en: a14d501c72e73fdc
+  zh: ade3182dd9bf7f3c
+/licensing/recording-modifications:
+  en: 7080e20bfa533721
+  zh: 7035330bc2dbb927
+/licensing/what-a-release-must-carry:
+  en: ce079b7e0c15d53d
+  zh: 0daad0811b4cffdd

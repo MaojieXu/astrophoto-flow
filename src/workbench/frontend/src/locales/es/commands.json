@@ -1,0 +1,364 @@
+{
+  "Comfy-Desktop_CheckForUpdates": {
+    "label": "Buscar actualizaciones"
+  },
+  "Comfy-Desktop_Folders_OpenCustomNodesFolder": {
+    "label": "Abrir carpeta de nodos personalizados"
+  },
+  "Comfy-Desktop_Folders_OpenInputsFolder": {
+    "label": "Abrir carpeta de entradas"
+  },
+  "Comfy-Desktop_Folders_OpenLogsFolder": {
+    "label": "Abrir carpeta de registros"
+  },
+  "Comfy-Desktop_Folders_OpenModelConfig": {
+    "label": "Abrir extra_model_paths.yaml"
+  },
+  "Comfy-Desktop_Folders_OpenModelsFolder": {
+    "label": "Abrir carpeta de modelos"
+  },
+  "Comfy-Desktop_Folders_OpenOutputsFolder": {
+    "label": "Abrir carpeta de salidas"
+  },
+  "Comfy-Desktop_OpenDevTools": {
+    "label": "Abrir herramientas de desarrollo"
+  },
+  "Comfy-Desktop_OpenUserGuide": {
+    "label": "Guía de usuario de escritorio"
+  },
+  "Comfy-Desktop_Quit": {
+    "label": "Salir"
+  },
+  "Comfy-Desktop_Reinstall": {
+    "label": "Reinstalar"
+  },
+  "Comfy-Desktop_Restart": {
+    "label": "Reiniciar"
+  },
+  "Comfy_3DViewer_Open3DViewer": {
+    "label": "Abrir visor 3D (Beta) para el nodo seleccionado"
+  },
+  "Comfy_BrowseModelAssets": {
+    "label": "Experimental: Explorar recursos de modelos"
+  },
+  "Comfy_BrowseTemplates": {
+    "label": "Explorar plantillas"
+  },
+  "Comfy_Canvas_CopySelected": {
+    "label": "Copiar"
+  },
+  "Comfy_Canvas_DeleteSelectedItems": {
+    "label": "Eliminar elementos seleccionados"
+  },
+  "Comfy_Canvas_FitView": {
+    "label": "Ajustar vista a los nodos seleccionados"
+  },
+  "Comfy_Canvas_Lock": {
+    "label": "Bloquear lienzo"
+  },
+  "Comfy_Canvas_MoveSelectedNodes_Down": {
+    "label": "Mover nodos seleccionados hacia abajo"
+  },
+  "Comfy_Canvas_MoveSelectedNodes_Left": {
+    "label": "Mover nodos seleccionados a la izquierda"
+  },
+  "Comfy_Canvas_MoveSelectedNodes_Right": {
+    "label": "Mover nodos seleccionados a la derecha"
+  },
+  "Comfy_Canvas_MoveSelectedNodes_Up": {
+    "label": "Mover nodos seleccionados hacia arriba"
+  },
+  "Comfy_Canvas_PasteFromClipboard": {
+    "label": "Pegar"
+  },
+  "Comfy_Canvas_PasteFromClipboardWithConnect": {
+    "label": "Pegar con conectar"
+  },
+  "Comfy_Canvas_ResetView": {
+    "label": "Restablecer vista"
+  },
+  "Comfy_Canvas_Resize": {
+    "label": "Redimensionar nodos seleccionados"
+  },
+  "Comfy_Canvas_SelectAll": {
+    "label": "Seleccionar todo"
+  },
+  "Comfy_Canvas_ToggleLinkVisibility": {
+    "label": "Alternar visibilidad de enlaces del lienzo"
+  },
+  "Comfy_Canvas_ToggleLock": {
+    "label": "Alternar bloqueo del lienzo"
+  },
+  "Comfy_Canvas_ToggleMinimap": {
+    "label": "Alternar minimapa del lienzo"
+  },
+  "Comfy_Canvas_ToggleSelectedNodes_Bypass": {
+    "label": "Omitir/No omitir nodos seleccionados"
+  },
+  "Comfy_Canvas_ToggleSelectedNodes_Collapse": {
+    "label": "Colapsar/Expandir nodos seleccionados"
+  },
+  "Comfy_Canvas_ToggleSelectedNodes_Mute": {
+    "label": "Silenciar/desilenciar nodos seleccionados"
+  },
+  "Comfy_Canvas_ToggleSelectedNodes_Pin": {
+    "label": "Anclar/Desanclar nodos seleccionados"
+  },
+  "Comfy_Canvas_ToggleSelected_Pin": {
+    "label": "Anclar/Desanclar elementos seleccionados"
+  },
+  "Comfy_Canvas_Unlock": {
+    "label": "Desbloquear lienzo"
+  },
+  "Comfy_Canvas_ZoomIn": {
+    "label": "Acercar"
+  },
+  "Comfy_Canvas_ZoomOut": {
+    "label": "Alejar"
+  },
+  "Comfy_ClearPendingTasks": {
+    "label": "Borrar tareas pendientes"
+  },
+  "Comfy_ClearWorkflow": {
+    "label": "Borrar flujo de trabajo"
+  },
+  "Comfy_ContactSupport": {
+    "label": "Contactar soporte"
+  },
+  "Comfy_Dev_ShowModelSelector": {
+    "label": "Mostrar selector de modelo (Dev)"
+  },
+  "Comfy_DuplicateWorkflow": {
+    "label": "Duplicar flujo de trabajo actual"
+  },
+  "Comfy_ExportWorkflow": {
+    "label": "Exportar flujo de trabajo"
+  },
+  "Comfy_ExportWorkflowAPI": {
+    "label": "Exportar flujo de trabajo (formato API)"
+  },
+  "Comfy_Graph_ConvertToSubgraph": {
+    "label": "Convertir selección en subgrafo"
+  },
+  "Comfy_Graph_EditSubgraphWidgets": {
+    "label": "Editar widgets del subgrafo"
+  },
+  "Comfy_Graph_ExitSubgraph": {
+    "label": "Salir de subgrafo"
+  },
+  "Comfy_Graph_FitGroupToContents": {
+    "label": "Ajustar grupo al contenido"
+  },
+  "Comfy_Graph_GroupSelectedNodes": {
+    "label": "Agrupar nodos seleccionados"
+  },
+  "Comfy_Graph_ToggleWidgetPromotion": {
+    "label": "Alternar promoción del widget sobre el que se pasa el cursor"
+  },
+  "Comfy_Graph_UnpackSubgraph": {
+    "label": "Desempaquetar el subgrafo seleccionado"
+  },
+  "Comfy_Help_AboutComfyUI": {
+    "label": "Abrir Acerca de ComfyUI"
+  },
+  "Comfy_Help_OpenComfyOrgDiscord": {
+    "label": "Abrir Discord de Comfy-Org"
+  },
+  "Comfy_Help_OpenComfyUIDocs": {
+    "label": "Abrir documentación de ComfyUI"
+  },
+  "Comfy_Help_OpenComfyUIForum": {
+    "label": "Abrir foro de ComfyUI"
+  },
+  "Comfy_Help_OpenComfyUIIssues": {
+    "label": "Abrir problemas de ComfyUI"
+  },
+  "Comfy_Interrupt": {
+    "label": "Interrumpir"
+  },
+  "Comfy_LayerEditor_OpenLayerEditor": {
+    "label": "Abrir el editor de capas para el nodo seleccionado"
+  },
+  "Comfy_LoadDefaultWorkflow": {
+    "label": "Cargar flujo de trabajo predeterminado"
+  },
+  "Comfy_Manager_CustomNodesManager_ShowCustomNodesMenu": {
+    "label": "Administrador de nodos personalizados"
+  },
+  "Comfy_Manager_CustomNodesManager_ShowLegacyCustomNodesMenu": {
+    "label": "Nodos personalizados (heredados)"
+  },
+  "Comfy_Manager_ShowLegacyManagerMenu": {
+    "label": "Menú del administrador (heredado)"
+  },
+  "Comfy_Manager_ShowMissingPacks": {
+    "label": "Instalar nodos personalizados faltantes"
+  },
+  "Comfy_Manager_ShowUpdateAvailablePacks": {
+    "label": "Buscar actualizaciones de nodos personalizados"
+  },
+  "Comfy_MaskEditor_BrushSize_Decrease": {
+    "label": "Disminuir tamaño del pincel en el editor de máscara"
+  },
+  "Comfy_MaskEditor_BrushSize_Increase": {
+    "label": "Aumentar tamaño del pincel en el editor de máscara"
+  },
+  "Comfy_MaskEditor_ColorPicker": {
+    "label": "Abrir selector de color en el editor de máscara"
+  },
+  "Comfy_MaskEditor_Mirror_Horizontal": {
+    "label": "Reflejar horizontalmente en el editor de máscara"
+  },
+  "Comfy_MaskEditor_Mirror_Vertical": {
+    "label": "Reflejar verticalmente en el editor de máscara"
+  },
+  "Comfy_MaskEditor_OpenMaskEditor": {
+    "label": "Abrir editor de máscara para el nodo seleccionado"
+  },
+  "Comfy_MaskEditor_Rotate_Left": {
+    "label": "Girar a la izquierda en el editor de máscara"
+  },
+  "Comfy_MaskEditor_Rotate_Right": {
+    "label": "Girar a la derecha en el editor de máscara"
+  },
+  "Comfy_Memory_UnloadModels": {
+    "label": "Descargar modelos"
+  },
+  "Comfy_Memory_UnloadModelsAndExecutionCache": {
+    "label": "Descargar modelos y caché de ejecución"
+  },
+  "Comfy_NewBlankWorkflow": {
+    "label": "Nuevo flujo de trabajo en blanco"
+  },
+  "Comfy_Onboarding_Replay": {
+    "label": "Repetir la introducción"
+  },
+  "Comfy_OpenClipspace": {
+    "label": "Clipspace"
+  },
+  "Comfy_OpenManagerDialog": {
+    "label": "Administrador"
+  },
+  "Comfy_OpenWorkflow": {
+    "label": "Abrir flujo de trabajo"
+  },
+  "Comfy_PublishSubgraph": {
+    "label": "Publicar subgrafo"
+  },
+  "Comfy_QueuePrompt": {
+    "label": "Encolar prompt"
+  },
+  "Comfy_QueuePromptFront": {
+    "label": "Encolar prompt (al frente)"
+  },
+  "Comfy_QueueSelectedOutputNodes": {
+    "label": "Encolar nodos de salida seleccionados"
+  },
+  "Comfy_Queue_ToggleOverlay": {
+    "label": "Alternar historial de trabajos"
+  },
+  "Comfy_Redo": {
+    "label": "Rehacer"
+  },
+  "Comfy_RefreshNodeDefinitions": {
+    "label": "Actualizar definiciones de nodo"
+  },
+  "Comfy_RenameWorkflow": {
+    "label": "Renombrar flujo de trabajo"
+  },
+  "Comfy_SaveWorkflow": {
+    "label": "Guardar flujo de trabajo"
+  },
+  "Comfy_SaveWorkflowAs": {
+    "label": "Guardar flujo de trabajo como"
+  },
+  "Comfy_ShowSettingsDialog": {
+    "label": "Mostrar diálogo de configuraciones"
+  },
+  "Comfy_Subgraph_SetDescription": {
+    "label": "Establecer descripción del subgrafo"
+  },
+  "Comfy_Subgraph_SetSearchAliases": {
+    "label": "Establecer alias de búsqueda del subgrafo"
+  },
+  "Comfy_ToggleCanvasInfo": {
+    "label": "Rendimiento del lienzo"
+  },
+  "Comfy_ToggleHelpCenter": {
+    "label": "Centro de ayuda"
+  },
+  "Comfy_ToggleLinear": {
+    "label": "Alternar modo de aplicación"
+  },
+  "Comfy_ToggleQPOV2": {
+    "label": "Alternar panel de cola V2"
+  },
+  "Comfy_ToggleTheme": {
+    "label": "Cambiar tema (oscuro/claro)"
+  },
+  "Comfy_Undo": {
+    "label": "Deshacer"
+  },
+  "Comfy_User_OpenSignInDialog": {
+    "label": "Abrir diálogo de inicio de sesión"
+  },
+  "Comfy_User_SignOut": {
+    "label": "Cerrar sesión"
+  },
+  "Experimental_ToggleVueNodes": {
+    "label": "Experimental: habilitar nodos 2.0"
+  },
+  "Workspace_CloseWorkflow": {
+    "label": "Cerrar flujo de trabajo actual"
+  },
+  "Workspace_NextOpenedWorkflow": {
+    "label": "Siguiente flujo de trabajo abierto"
+  },
+  "Workspace_PreviousOpenedWorkflow": {
+    "label": "Flujo de trabajo abierto anterior"
+  },
+  "Workspace_SearchBox_Toggle": {
+    "label": "Alternar caja de búsqueda"
+  },
+  "Workspace_ToggleBottomPanel": {
+    "label": "Alternar panel inferior"
+  },
+  "Workspace_ToggleBottomPanelTab_command-terminal": {
+    "label": "Mostrar/ocultar panel inferior de terminal"
+  },
+  "Workspace_ToggleBottomPanelTab_logs-terminal": {
+    "label": "Mostrar/ocultar panel inferior de registros"
+  },
+  "Workspace_ToggleBottomPanelTab_shortcuts-essentials": {
+    "label": "Alternar panel inferior esencial"
+  },
+  "Workspace_ToggleBottomPanelTab_shortcuts-view-controls": {
+    "label": "Alternar panel inferior de controles de vista"
+  },
+  "Workspace_ToggleBottomPanel_Shortcuts": {
+    "label": "Mostrar diálogo de combinaciones de teclas"
+  },
+  "Workspace_ToggleFocusMode": {
+    "label": "Alternar modo de enfoque"
+  },
+  "Workspace_ToggleSidebarTab_apps": {
+    "label": "Alternar barra lateral de aplicaciones",
+    "tooltip": "Aplicaciones"
+  },
+  "Workspace_ToggleSidebarTab_assets": {
+    "label": "Alternar barra lateral de recursos",
+    "tooltip": "Recursos"
+  },
+  "Workspace_ToggleSidebarTab_model-library": {
+    "label": "Alternar barra lateral de biblioteca de modelos",
+    "tooltip": "Biblioteca de modelos"
+  },
+  "Workspace_ToggleSidebarTab_node-library": {
+    "label": "Alternar barra lateral de biblioteca de nodos",
+    "tooltip": "Biblioteca de nodos"
+  },
+  "Workspace_ToggleSidebarTab_workflows": {
+    "label": "Alternar barra lateral de flujos de trabajo",
+    "tooltip": "Flujos de trabajo"
+  }
+}

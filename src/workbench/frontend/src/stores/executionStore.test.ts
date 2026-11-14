@@ -1,0 +1,2773 @@
+import { useWorkflowStore } from '@/platform/workflow/management/stores/workflowStore'
+import type {
+  ComfyWorkflow,
+  LoadedComfyWorkflow
+} from '@/platform/workflow/management/stores/comfyWorkflow'
+import { fromPartial } from '@total-typescript/shoehorn'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { nextTick } from 'vue'
+
+import { useAppMode } from '@/composables/useAppMode'
+import { useTelemetry } from '@/platform/telemetry'
+import { app } from '@/scripts/app'
+import { api } from '@/scripts/api'
+import { defaultGraph } from '@/scripts/defaultGraph'
+import { MAX_PROGRESS_JOBS, useExecutionStore } from '@/stores/executionStore'
+import { useExecutionErrorStore } from '@/stores/executionErrorStore'
+import { useMissingNodesErrorStore } from '@/platform/nodeReplacement/missingNodesErrorStore'
+import {
+  createNodeExecutionId,
+  createNodeLocatorId
+} from '@/types/nodeIdentification'
+import { executionIdToNodeLocatorId } from '@/utils/graphTraversalUtil'
+import type { NodeProgressState } from '@/platform/remote/comfyui/execution/types'
+
+const defaultWorkflowExecutionIntent = {
+  trigger_source: 'unknown'
+} as const
+
+vi.mock(import('@/composables/useAppMode'))
+
+import { createMockLGraphNode } from '@/utils/__tests__/litegraphTestUtils'
+import { toNodeId } from '@/types/nodeId'
+
+vi.mock(import('@/platform/distribution/types'), () => ({
+  isCloud: true
+}))
+
+vi.mock(import('@/platform/telemetry'))
+
+// Remove any previous global types
+declare global {
+  interface Window {}
+}
+
+/**
+ * Captures event handlers registered via api.addEventListener so tests
+ * can invoke them directly (e.g. to simulate WebSocket progress events).
+ */
+type EventHandler = (...args: unknown[]) => void
+const apiEventHandlers = new Map<string, EventHandler>()
+vi.mock<unknown>(import('@/scripts/api'), () => ({
+  api: {
+    addEventListener: vi.fn((event: string, handler: EventHandler) => {
+      apiEventHandlers.set(event, handler)
+    }),
+    removeEventListener: vi.fn((event: string) => {
+      apiEventHandlers.delete(event)
+    }),
+    dispatchCustomEvent: vi.fn((event: string, detail?: unknown) => {
+      const handler = apiEventHandlers.get(event)
+      if (!handler) return false
+      handler(new CustomEvent(event, { detail }))
+      return true
+    }),
+    clientId: 'test-client',
+    apiURL: vi.fn((path: string) => `/api${path}`)
+  }
+}))
+
+// Mock the app import with proper implementation
+vi.mock<unknown>(import('@/scripts/app'), () => {
+  const rootGraph = {
+    getNodeById: vi.fn(),
+    nodes: [] // Add nodes array for workflowStore iteration
+  }
+  return {
+    app: {
+      rootGraph,
+      rootGraphOrUndefined: rootGraph,
+      revokePreviews: vi.fn(),
+      nodePreviewImages: {}
+    }
+  }
+})
+
+beforeEach(() => {
+  useWorkflowStore().activeWorkflow = null
+  Object.assign(useWorkflowStore(), { openWorkflows: [] })
+  vi.mocked(useWorkflowStore().isOpen).mockImplementation((workflow) =>
+    useWorkflowStore().openWorkflows.some((open) => open.path === workflow.path)
+  )
+})
+
+function createQueuedWorkflow(path: string = 'workflows/test.json') {
+  return fromPartial<LoadedComfyWorkflow>({
+    activeState: { id: 'workflow-id' },
+    initialState: { id: 'workflow-id' },
+    path
+  })
+}
+
+function createPromptNode(title: string, classType: string) {
+  return {
+    inputs: {},
+    class_type: classType,
+    _meta: {
+      title
+    }
+  }
+}
+
+const TEST_SUBGRAPH_UUID = 'a1b2c3d4-e5f6-7890-abcd-ef1234567890'
+
+function createTestSubgraph(...nodeIds: number[]) {
+  const nodes = nodeIds.map((id) => createMockLGraphNode({ id: toNodeId(id) }))
+  return {
+    id: TEST_SUBGRAPH_UUID,
+    nodes,
+    getNodeById: (id: string) => nodes.find((node) => node.id === id) ?? null
+  }
+}
+
+describe('useExecutionStore - NodeLocatorId conversions', () => {
+  let store: ReturnType<typeof useExecutionStore>
+
+  beforeEach(() => {
+    // Reset mock implementations
+
+    store = useExecutionStore()
+  })
+
+  describe('executionIdToNodeLocatorId', () => {
+    it('should convert execution ID to NodeLocatorId', () => {
+      // Mock subgraph structure
+      const mockSubgraph = createTestSubgraph(456)
+
+      const mockNode = createMockLGraphNode({
+        id: 123,
+        isSubgraphNode: () => true,
+        subgraph: mockSubgraph
+      })
+      // Mock app.rootGraph.getNodeById to return the mock node
+      vi.mocked(app.rootGraph.getNodeById).mockReturnValue(mockNode)
+
+      const result = executionIdToNodeLocatorId(app.rootGraph, '123:456')
+
+      expect(result).toBe('a1b2c3d4-e5f6-7890-abcd-ef1234567890:456')
+    })
+
+    it('should convert simple node ID to NodeLocatorId', () => {
+      const result = executionIdToNodeLocatorId(app.rootGraph, '123')
+
+      // For simple node IDs, it should return the ID as-is
+      expect(result).toBe('123')
+    })
+
+    it('should handle numeric node IDs', () => {
+      const result = executionIdToNodeLocatorId(app.rootGraph, 123)
+
+      // For numeric IDs, it should convert to string and return as-is
+      expect(result).toBe('123')
+    })
+
+    it('should handle IDs before the root graph is initialized', () => {
+      expect(executionIdToNodeLocatorId(undefined, '123')).toBe('123')
+      expect(executionIdToNodeLocatorId(undefined, '123:456')).toBeUndefined()
+    })
+
+    it('should return undefined when conversion fails', () => {
+      // Mock app.rootGraph.getNodeById to return null (node not found)
+      vi.mocked(app.rootGraph.getNodeById).mockReturnValue(null)
+
+      expect(executionIdToNodeLocatorId(app.rootGraph, '999:456')).toBe(
+        undefined
+      )
+    })
+  })
+
+  describe('nodeLocatorIdToExecutionId', () => {
+    it('should convert NodeLocatorId to execution ID', () => {
+      const locatorId = createNodeLocatorId(
+        'a1b2c3d4-e5f6-7890-abcd-ef1234567890',
+        toNodeId(456)
+      )
+      const mockExecutionId = createNodeExecutionId([
+        toNodeId(123),
+        toNodeId(456)
+      ])
+      vi.mocked(
+        useWorkflowStore().nodeLocatorIdToNodeExecutionId
+      ).mockReturnValue(mockExecutionId)
+
+      const result = store.nodeLocatorIdToExecutionId(locatorId)
+
+      expect(
+        useWorkflowStore().nodeLocatorIdToNodeExecutionId
+      ).toHaveBeenCalledWith(locatorId)
+      expect(result).toBe(mockExecutionId)
+    })
+
+    it('should return null when conversion fails', () => {
+      const locatorId = createNodeLocatorId(
+        'unknown-subgraph-id',
+        toNodeId(456)
+      )
+      vi.mocked(
+        useWorkflowStore().nodeLocatorIdToNodeExecutionId
+      ).mockReturnValue(null)
+
+      const result = store.nodeLocatorIdToExecutionId(locatorId)
+
+      expect(result).toBeNull()
+    })
+  })
+})
+
+describe('useExecutionStore - nodeLocationProgressStates caching', () => {
+  let store: ReturnType<typeof useExecutionStore>
+
+  beforeEach(() => {
+    store = useExecutionStore()
+  })
+
+  it('should resolve execution IDs to locator IDs for subgraph nodes', () => {
+    const mockSubgraph = createTestSubgraph(456)
+    const mockNode = createMockLGraphNode({
+      id: 123,
+      isSubgraphNode: () => true,
+      subgraph: mockSubgraph
+    })
+    vi.mocked(app.rootGraph.getNodeById).mockReturnValue(mockNode)
+
+    store.nodeProgressStates = {
+      node1: {
+        display_node_id: '123:456',
+        state: 'running',
+        value: 50,
+        max: 100,
+        prompt_id: 'test',
+        node_id: 'node1'
+      }
+    }
+
+    const result = store.nodeLocationProgressStates
+
+    expect(result[createNodeLocatorId(null, toNodeId(123))]).toBeDefined()
+    expect(
+      result[
+        createNodeLocatorId(
+          'a1b2c3d4-e5f6-7890-abcd-ef1234567890',
+          toNodeId(456)
+        )
+      ]
+    ).toBeDefined()
+  })
+
+  it('should not re-traverse graph for same execution IDs across progress updates', () => {
+    const mockSubgraph = createTestSubgraph(456)
+    const mockNode = createMockLGraphNode({
+      id: 123,
+      isSubgraphNode: () => true,
+      subgraph: mockSubgraph
+    })
+    vi.mocked(app.rootGraph.getNodeById).mockReturnValue(mockNode)
+
+    store.nodeProgressStates = {
+      node1: {
+        display_node_id: '123:456',
+        state: 'running',
+        value: 50,
+        max: 100,
+        prompt_id: 'test',
+        node_id: 'node1'
+      }
+    }
+
+    // First evaluation triggers graph traversal
+    expect(
+      store.nodeLocationProgressStates[createNodeLocatorId(null, toNodeId(123))]
+    ).toBeDefined()
+    const callCountAfterFirst = vi.mocked(app.rootGraph.getNodeById).mock.calls
+      .length
+
+    // Second update with same execution IDs but different progress
+    store.nodeProgressStates = {
+      node1: {
+        display_node_id: '123:456',
+        state: 'running',
+        value: 75,
+        max: 100,
+        prompt_id: 'test',
+        node_id: 'node1'
+      }
+    }
+
+    expect(
+      store.nodeLocationProgressStates[createNodeLocatorId(null, toNodeId(123))]
+    ).toBeDefined()
+
+    // getNodeById should NOT be called again for the same execution ID
+    expect(vi.mocked(app.rootGraph.getNodeById).mock.calls.length).toBe(
+      callCountAfterFirst
+    )
+  })
+
+  it('should correctly resolve multiple sibling nodes in the same subgraph', () => {
+    const mockSubgraph = createTestSubgraph(456, 789)
+    const mockNode = createMockLGraphNode({
+      id: 123,
+      isSubgraphNode: () => true,
+      subgraph: mockSubgraph
+    })
+    vi.mocked(app.rootGraph.getNodeById).mockReturnValue(mockNode)
+
+    // Two sibling nodes in the same subgraph
+    store.nodeProgressStates = {
+      node1: {
+        display_node_id: '123:456',
+        state: 'running',
+        value: 50,
+        max: 100,
+        prompt_id: 'test',
+        node_id: 'node1'
+      },
+      node2: {
+        display_node_id: '123:789',
+        state: 'running',
+        value: 30,
+        max: 100,
+        prompt_id: 'test',
+        node_id: 'node2'
+      }
+    }
+
+    const result = store.nodeLocationProgressStates
+
+    // Both sibling nodes should be resolved with the correct subgraph UUID
+    expect(
+      result[
+        createNodeLocatorId(
+          'a1b2c3d4-e5f6-7890-abcd-ef1234567890',
+          toNodeId(456)
+        )
+      ]
+    ).toBeDefined()
+    expect(
+      result[
+        createNodeLocatorId(
+          'a1b2c3d4-e5f6-7890-abcd-ef1234567890',
+          toNodeId(789)
+        )
+      ]
+    ).toBeDefined()
+
+    // The shared parent "123" should also have a merged state
+    expect(result[createNodeLocatorId(null, toNodeId(123))]).toBeDefined()
+    expect(result[createNodeLocatorId(null, toNodeId(123))].state).toBe(
+      'running'
+    )
+  })
+})
+
+describe('useExecutionStore - nodeProgressStatesByJob eviction', () => {
+  let store: ReturnType<typeof useExecutionStore>
+
+  function makeProgressNodes(
+    nodeId: string,
+    jobId: string
+  ): Record<string, NodeProgressState> {
+    return {
+      [nodeId]: {
+        value: 5,
+        max: 10,
+        state: 'running',
+        node_id: nodeId,
+        prompt_id: jobId,
+        display_node_id: nodeId
+      }
+    }
+  }
+
+  function fireProgressState(
+    jobId: string,
+    nodes: Record<string, NodeProgressState>
+  ) {
+    const handler = apiEventHandlers.get('progress_state')
+    if (!handler) throw new Error('progress_state handler not bound')
+    handler(
+      new CustomEvent('progress_state', { detail: { nodes, prompt_id: jobId } })
+    )
+    // Flush the RAF so the batched update is applied immediately
+    vi.advanceTimersToNextFrame()
+  }
+
+  beforeEach(() => {
+    apiEventHandlers.clear()
+    store = useExecutionStore()
+    store.bindExecutionEvents()
+  })
+
+  it('should retain entries below the limit', () => {
+    for (let i = 0; i < 5; i++) {
+      fireProgressState(`job-${i}`, makeProgressNodes(`${i}`, `job-${i}`))
+    }
+
+    expect(Object.keys(store.nodeProgressStatesByJob)).toHaveLength(5)
+  })
+
+  it('should evict oldest entries when exceeding MAX_PROGRESS_JOBS', () => {
+    for (let i = 0; i < MAX_PROGRESS_JOBS + 10; i++) {
+      fireProgressState(`job-${i}`, makeProgressNodes(`${i}`, `job-${i}`))
+    }
+
+    const keys = Object.keys(store.nodeProgressStatesByJob)
+    expect(keys).toHaveLength(MAX_PROGRESS_JOBS)
+    // Oldest jobs (0-9) should be evicted; newest should remain
+    expect(keys).not.toContain('job-0')
+    expect(keys).not.toContain('job-9')
+    expect(keys).toContain(`job-${MAX_PROGRESS_JOBS + 9}`)
+    expect(keys).toContain(`job-${MAX_PROGRESS_JOBS}`)
+  })
+
+  it('should keep the most recently added job after eviction', () => {
+    for (let i = 0; i < MAX_PROGRESS_JOBS + 1; i++) {
+      fireProgressState(`job-${i}`, makeProgressNodes(`${i}`, `job-${i}`))
+    }
+
+    const lastJobId = `job-${MAX_PROGRESS_JOBS}`
+    expect(store.nodeProgressStatesByJob).toHaveProperty(lastJobId)
+  })
+
+  it('should not evict when updating an existing job', () => {
+    for (let i = 0; i < MAX_PROGRESS_JOBS; i++) {
+      fireProgressState(`job-${i}`, makeProgressNodes(`${i}`, `job-${i}`))
+    }
+    expect(Object.keys(store.nodeProgressStatesByJob)).toHaveLength(
+      MAX_PROGRESS_JOBS
+    )
+
+    // Update an existing job — should not trigger eviction
+    fireProgressState('job-0', makeProgressNodes('0', 'job-0'))
+    expect(Object.keys(store.nodeProgressStatesByJob)).toHaveLength(
+      MAX_PROGRESS_JOBS
+    )
+    expect(store.nodeProgressStatesByJob).toHaveProperty('job-0')
+  })
+})
+
+describe('useExecutionStore - reconcileInitializingJobs', () => {
+  let store: ReturnType<typeof useExecutionStore>
+
+  beforeEach(() => {
+    store = useExecutionStore()
+  })
+
+  it('should remove job IDs not present in active jobs', () => {
+    store.initializingJobIds = new Set(['job-1', 'job-2', 'job-3'])
+
+    store.reconcileInitializingJobs(new Set(['job-1']))
+
+    expect(store.initializingJobIds).toEqual(new Set(['job-1']))
+  })
+
+  it('should be a no-op when all initializing IDs are active', () => {
+    store.initializingJobIds = new Set(['job-1', 'job-2'])
+
+    store.reconcileInitializingJobs(new Set(['job-1', 'job-2', 'job-3']))
+
+    expect(store.initializingJobIds).toEqual(new Set(['job-1', 'job-2']))
+  })
+
+  it('should be a no-op when there are no initializing jobs', () => {
+    store.initializingJobIds = new Set()
+
+    store.reconcileInitializingJobs(new Set(['job-1']))
+
+    expect(store.initializingJobIds).toEqual(new Set())
+  })
+
+  it('should clear all initializing IDs when no active jobs exist', () => {
+    store.initializingJobIds = new Set(['job-1', 'job-2'])
+
+    store.reconcileInitializingJobs(new Set())
+
+    expect(store.initializingJobIds).toEqual(new Set())
+  })
+})
+
+describe('useExecutionStore - workflowStatus', () => {
+  const graphAId = '11111111-1111-4111-8111-111111111111'
+  const graphBId = '22222222-2222-4222-8222-222222222222'
+
+  let store: ReturnType<typeof useExecutionStore>
+  type Workflow = Parameters<typeof store.storeJob>[0]['workflow']
+  const makeWorkflow = (path: string, graphId: string): Workflow =>
+    ({
+      path,
+      filename: path.split('/').pop(),
+      activeState: { id: graphId },
+      initialState: { id: graphId }
+    }) as Workflow
+  const workflowA = makeWorkflow('/workflows/a.json', graphAId)
+  const workflowB = makeWorkflow('/workflows/b.json', graphBId)
+
+  function fireExecutionStart(jobId: string) {
+    const handler = apiEventHandlers.get('execution_start')
+    if (!handler) throw new Error('execution_start handler not bound')
+    handler(
+      new CustomEvent('execution_start', { detail: { prompt_id: jobId } })
+    )
+  }
+
+  function fireExecutionSuccess(jobId: string) {
+    const handler = apiEventHandlers.get('execution_success')
+    if (!handler) throw new Error('execution_success handler not bound')
+    handler(
+      new CustomEvent('execution_success', { detail: { prompt_id: jobId } })
+    )
+  }
+
+  function fireExecutionError(jobId: string) {
+    const handler = apiEventHandlers.get('execution_error')
+    if (!handler) throw new Error('execution_error handler not bound')
+    handler(
+      new CustomEvent('execution_error', {
+        detail: {
+          prompt_id: jobId,
+          node_id: '1',
+          node_type: 'TestNode',
+          exception_message: 'fail',
+          exception_type: 'Error',
+          traceback: []
+        }
+      })
+    )
+  }
+
+  function fireExecutionInterrupted(jobId: string) {
+    const handler = apiEventHandlers.get('execution_interrupted')
+    if (!handler) throw new Error('execution_interrupted handler not bound')
+    handler(
+      new CustomEvent('execution_interrupted', {
+        detail: { prompt_id: jobId }
+      })
+    )
+  }
+
+  function callStoreJob(jobId: string, workflow: Workflow) {
+    const graphId = workflow.activeState?.id ?? workflow.initialState?.id
+    if (!graphId) throw new Error('workflow graph ID missing')
+    store.registerJobWorkflowIdMapping(jobId, graphId)
+    store.storeJob({
+      nodes: ['1'],
+      id: jobId,
+      promptOutput: { '1': createPromptNode('Node', 'TestNode') },
+      startTime: 42,
+      submissionAcceptedAt: 62,
+      workflow,
+      mode: 'graph'
+    })
+  }
+
+  beforeEach(() => {
+    apiEventHandlers.clear()
+    Object.assign(useWorkflowStore(), { openWorkflows: [workflowA, workflowB] })
+    store = useExecutionStore()
+    store.bindExecutionEvents()
+  })
+
+  it('sets running on execution_start when storeJob already ran', () => {
+    callStoreJob('job-1', workflowA)
+    fireExecutionStart('job-1')
+
+    expect(useTelemetry()?.trackExecutionOutcome).not.toHaveBeenCalled()
+    expect(store.getWorkflowStatus(workflowA)).toBe('running')
+  })
+
+  it('flushes running status when storeJob arrives after WS', () => {
+    fireExecutionStart('job-1')
+    expect(store.getWorkflowStatus(workflowA)).toBeUndefined()
+
+    callStoreJob('job-1', workflowA)
+    expect(store.getWorkflowStatus(workflowA)).toBe('running')
+  })
+
+  it('flushes terminal completed when WS finishes before storeJob', () => {
+    const now = vi.spyOn(performance, 'now').mockReturnValue(92)
+
+    try {
+      fireExecutionStart('job-1')
+      now.mockReturnValue(142)
+      fireExecutionSuccess('job-1')
+
+      callStoreJob('job-1', workflowA)
+      expect(
+        useTelemetry()?.trackExecutionOutcome
+      ).toHaveBeenCalledExactlyOnceWith({
+        startTime: 42,
+        ...defaultWorkflowExecutionIntent,
+        submissionAcceptedAt: 62,
+        executionStartedAt: 92,
+        endTime: 142,
+        success: true,
+        failureReason: ''
+      })
+      expect(store.getWorkflowStatus(workflowA)).toBe('completed')
+      expect(store.queuedJobs['job-1']).toBeUndefined()
+    } finally {
+      now.mockRestore()
+    }
+  })
+
+  it('flushes terminal failed when WS errors before storeJob', () => {
+    const now = vi.spyOn(performance, 'now').mockReturnValue(82)
+
+    try {
+      fireExecutionError('job-1')
+
+      callStoreJob('job-1', workflowA)
+      expect(
+        useTelemetry()?.trackExecutionOutcome
+      ).toHaveBeenCalledExactlyOnceWith({
+        startTime: 42,
+        ...defaultWorkflowExecutionIntent,
+        submissionAcceptedAt: 62,
+        endTime: 82,
+        success: false,
+        failureReason: 'execution_failed'
+      })
+      expect(store.getWorkflowStatus(workflowA)).toBe('failed')
+    } finally {
+      now.mockRestore()
+    }
+  })
+
+  it('drops pending status on interrupt before storeJob', () => {
+    fireExecutionStart('job-1')
+    fireExecutionInterrupted('job-1')
+
+    callStoreJob('job-1', workflowA)
+    expect(store.getWorkflowStatus(workflowA)).toBeUndefined()
+  })
+
+  it('tracks every stage when execution succeeds', () => {
+    const now = vi.spyOn(performance, 'now').mockReturnValue(92)
+
+    try {
+      callStoreJob('job-1', workflowA)
+      fireExecutionStart('job-1')
+      now.mockReturnValue(142)
+      fireExecutionSuccess('job-1')
+
+      expect(
+        useTelemetry()?.trackExecutionOutcome
+      ).toHaveBeenCalledExactlyOnceWith({
+        startTime: 42,
+        ...defaultWorkflowExecutionIntent,
+        submissionAcceptedAt: 62,
+        executionStartedAt: 92,
+        endTime: 142,
+        success: true,
+        failureReason: ''
+      })
+      expect(store.getWorkflowStatus(workflowA)).toBe('completed')
+    } finally {
+      now.mockRestore()
+    }
+  })
+
+  it('tracks a workflow outcome only once for duplicate terminal events', () => {
+    const now = vi.spyOn(performance, 'now').mockReturnValue(92)
+
+    try {
+      callStoreJob('job-1', workflowA)
+      fireExecutionStart('job-1')
+      now.mockReturnValue(142)
+      fireExecutionSuccess('job-1')
+      fireExecutionSuccess('job-1')
+
+      expect(useTelemetry()?.trackExecutionOutcome).toHaveBeenCalledOnce()
+    } finally {
+      now.mockRestore()
+    }
+  })
+
+  it('keeps timing metadata until success after executing clears', () => {
+    const now = vi.spyOn(performance, 'now').mockReturnValue(92)
+
+    try {
+      callStoreJob('job-1', workflowA)
+      fireExecutionStart('job-1')
+      apiEventHandlers.get('executing')!(
+        new CustomEvent('executing', { detail: null })
+      )
+      now.mockReturnValue(142)
+      fireExecutionSuccess('job-1')
+
+      expect(
+        useTelemetry()?.trackExecutionOutcome
+      ).toHaveBeenCalledExactlyOnceWith({
+        startTime: 42,
+        ...defaultWorkflowExecutionIntent,
+        submissionAcceptedAt: 62,
+        executionStartedAt: 92,
+        endTime: 142,
+        success: true,
+        failureReason: ''
+      })
+    } finally {
+      now.mockRestore()
+    }
+  })
+
+  it('tracks completion with the workflow context captured for the job', () => {
+    const workflowContext = {
+      workflow_type: 'custom',
+      view_mode: 'graph',
+      execution_scope: 'partial',
+      total_node_count: 42,
+      executable_node_count: 12,
+      custom_node_count: 3,
+      api_node_count: 1,
+      subgraph_count: 2
+    } as const
+
+    store.storeJob({
+      nodes: ['1'],
+      id: 'job-1',
+      promptOutput: { '1': createPromptNode('Node', 'TestNode') },
+      startTime: 42,
+      workflow: workflowA,
+      mode: 'graph',
+      workflowContext,
+      workflowExecutionIntent: {
+        trigger_source: 'button'
+      }
+    })
+    fireExecutionSuccess('job-1')
+
+    expect(useTelemetry()?.trackExecutionOutcome).toHaveBeenCalledWith(
+      expect.objectContaining({
+        startTime: 42,
+        success: true,
+        failureReason: '',
+        trigger_source: 'button',
+        workflowContext
+      })
+    )
+  })
+
+  it('tracks the execution stage when execution fails', () => {
+    const now = vi.spyOn(performance, 'now').mockReturnValue(92)
+
+    try {
+      callStoreJob('job-1', workflowA)
+      fireExecutionStart('job-1')
+      now.mockReturnValue(142)
+      fireExecutionError('job-1')
+
+      expect(
+        useTelemetry()?.trackExecutionOutcome
+      ).toHaveBeenCalledExactlyOnceWith({
+        startTime: 42,
+        ...defaultWorkflowExecutionIntent,
+        submissionAcceptedAt: 62,
+        executionStartedAt: 92,
+        endTime: 142,
+        success: false,
+        failureReason: 'execution_failed'
+      })
+      expect(store.getWorkflowStatus(workflowA)).toBe('failed')
+    } finally {
+      now.mockRestore()
+    }
+  })
+
+  it('tracks an interrupted execution without showing a failed badge', () => {
+    const now = vi.spyOn(performance, 'now').mockReturnValue(92)
+
+    try {
+      callStoreJob('job-1', workflowA)
+      fireExecutionStart('job-1')
+      now.mockReturnValue(142)
+      fireExecutionInterrupted('job-1')
+
+      expect(
+        useTelemetry()?.trackExecutionOutcome
+      ).toHaveBeenCalledExactlyOnceWith({
+        startTime: 42,
+        ...defaultWorkflowExecutionIntent,
+        submissionAcceptedAt: 62,
+        executionStartedAt: 92,
+        endTime: 142,
+        success: false,
+        failureReason: 'execution_interrupted'
+      })
+      expect(store.getWorkflowStatus(workflowA)).toBeUndefined()
+    } finally {
+      now.mockRestore()
+    }
+  })
+
+  it('evicts the oldest pending status once the buffer cap is exceeded', () => {
+    // Each start with no matching storeJob buffers a 'running' status. One
+    // past the cap evicts the oldest so the buffer can't grow unbounded.
+    for (let i = 0; i <= MAX_PROGRESS_JOBS; i++) fireExecutionStart(`job-${i}`)
+
+    callStoreJob('job-0', workflowA)
+    expect(store.getWorkflowStatus(workflowA)).toBeUndefined()
+
+    callStoreJob(`job-${MAX_PROGRESS_JOBS}`, workflowB)
+    expect(store.getWorkflowStatus(workflowB)).toBe('running')
+  })
+
+  it('overwrites stale terminal with running on re-queue', () => {
+    callStoreJob('job-1', workflowA)
+    fireExecutionStart('job-1')
+    fireExecutionSuccess('job-1')
+    expect(store.getWorkflowStatus(workflowA)).toBe('completed')
+
+    // Re-queue the same workflow under a fresh jobId.
+    callStoreJob('job-2', workflowA)
+    fireExecutionStart('job-2')
+    expect(store.getWorkflowStatus(workflowA)).toBe('running')
+  })
+
+  it('ignores status events for unknown prompt ids', () => {
+    fireExecutionSuccess('unknown-job')
+    expect(store.getWorkflowStatus(workflowA)).toBeUndefined()
+    expect(store.getWorkflowStatus(workflowB)).toBeUndefined()
+  })
+
+  it('prunes only closed workflows, leaving open ones intact', async () => {
+    callStoreJob('job-a', workflowA)
+    callStoreJob('job-b', workflowB)
+    fireExecutionSuccess('job-a')
+    fireExecutionSuccess('job-b')
+
+    Object.assign(useWorkflowStore(), { openWorkflows: [workflowB] })
+    await nextTick()
+
+    expect(store.getWorkflowStatus(workflowA)).toBeUndefined()
+    expect(store.getWorkflowStatus(workflowB)).toBe('completed')
+  })
+
+  it('ignores terminal events for a workflow closed mid-run', async () => {
+    callStoreJob('job-a', workflowA)
+    fireExecutionStart('job-a')
+    expect(store.getWorkflowStatus(workflowA)).toBe('running')
+
+    // Close the tab while the job is still running.
+    Object.assign(useWorkflowStore(), { openWorkflows: [workflowB] })
+    await nextTick()
+    expect(store.getWorkflowStatus(workflowA)).toBeUndefined()
+
+    // A late success must not resurrect an entry for the closed workflow.
+    fireExecutionSuccess('job-a')
+    expect(store.getWorkflowStatus(workflowA)).toBeUndefined()
+  })
+
+  it('tracks service-level failures without writing failed', () => {
+    const now = vi.spyOn(performance, 'now').mockReturnValue(92)
+
+    try {
+      callStoreJob('job-1', workflowA)
+      fireExecutionStart('job-1')
+      expect(store.getWorkflowStatus(workflowA)).toBe('running')
+
+      now.mockReturnValue(142)
+      const handler = apiEventHandlers.get('execution_error')
+      handler!(
+        new CustomEvent('execution_error', {
+          detail: {
+            prompt_id: 'job-1',
+            node_id: '',
+            node_type: '',
+            exception_message: 'Job has stagnated',
+            exception_type: 'StagnationError',
+            traceback: []
+          }
+        })
+      )
+
+      expect(
+        useTelemetry()?.trackExecutionOutcome
+      ).toHaveBeenCalledExactlyOnceWith({
+        startTime: 42,
+        ...defaultWorkflowExecutionIntent,
+        submissionAcceptedAt: 62,
+        executionStartedAt: 92,
+        endTime: 142,
+        success: false,
+        failureReason: 'execution_failed'
+      })
+      expect(store.getWorkflowStatus(workflowA)).toBe('running')
+    } finally {
+      now.mockRestore()
+    }
+  })
+
+  it('clears running when an account precondition error ends the run', () => {
+    callStoreJob('job-1', workflowA)
+    fireExecutionStart('job-1')
+    expect(store.getWorkflowStatus(workflowA)).toBe('running')
+
+    apiEventHandlers.get('execution_error')!(
+      new CustomEvent('execution_error', {
+        detail: {
+          prompt_id: 'job-1',
+          node_id: '1',
+          node_type: 'TestNode',
+          exception_message:
+            'Payment Required: Please add credits to your account to use this node.',
+          exception_type: 'InsufficientFundsError',
+          traceback: []
+        }
+      })
+    )
+
+    expect(store.getWorkflowStatus(workflowA)).toBeUndefined()
+  })
+
+  it('drops pending failed when service-level error fires before storeJob', () => {
+    apiEventHandlers.get('execution_error')!(
+      new CustomEvent('execution_error', {
+        detail: {
+          prompt_id: 'job-1',
+          node_id: '',
+          node_type: '',
+          exception_message: 'Job has stagnated',
+          exception_type: 'StagnationError',
+          traceback: []
+        }
+      })
+    )
+
+    callStoreJob('job-1', workflowA)
+    expect(store.getWorkflowStatus(workflowA)).toBeUndefined()
+  })
+
+  it('clears workflowStatus on unbindExecutionEvents', () => {
+    callStoreJob('job-1', workflowA)
+    fireExecutionStart('job-1')
+    fireExecutionSuccess('job-1')
+    expect(store.getWorkflowStatus(workflowA)).toBe('completed')
+
+    store.unbindExecutionEvents()
+    expect(store.getWorkflowStatus(workflowA)).toBeUndefined()
+  })
+})
+
+describe('useExecutionStore - background workflow error routing', () => {
+  const graphAId = '11111111-1111-4111-8111-111111111111'
+  const graphBId = '22222222-2222-4222-8222-222222222222'
+  const graphCId = '33333333-3333-4333-8333-333333333333'
+  const graphDId = '44444444-4444-4444-8444-444444444444'
+  const graphEId = '55555555-5555-4555-8555-555555555555'
+  const graphFId = '66666666-6666-4666-8666-666666666666'
+
+  let store: ReturnType<typeof useExecutionStore>
+  let errorStore: ReturnType<typeof useExecutionErrorStore>
+
+  type Workflow = Parameters<typeof store.storeJob>[0]['workflow']
+  const makeWorkflow = (
+    path: string,
+    activeId?: string,
+    initialId = activeId
+  ): Workflow =>
+    ({
+      path,
+      filename: path.split('/').pop(),
+      ...(activeId && { activeState: { id: activeId } }),
+      ...(initialId && { initialState: { id: initialId } })
+    }) as Workflow
+
+  const workflowA = makeWorkflow('/workflows/a.json', graphAId)
+  const workflowB = makeWorkflow('/workflows/b.json', graphBId)
+
+  function callStoreJob(jobId: string, workflow: Workflow) {
+    store.storeJob({
+      nodes: ['1'],
+      id: jobId,
+      promptOutput: { '1': createPromptNode('Node', 'TestNode') },
+      startTime: 42,
+      submissionAcceptedAt: 62,
+      workflow,
+      mode: 'graph'
+    })
+  }
+
+  function fireExecutionError(
+    jobId: string,
+    detail: Record<string, unknown> = {}
+  ) {
+    const handler = apiEventHandlers.get('execution_error')
+    if (!handler) throw new Error('execution_error handler not bound')
+    handler(
+      new CustomEvent('execution_error', {
+        detail: {
+          prompt_id: jobId,
+          node_id: '1',
+          node_type: 'TestNode',
+          exception_message: 'boom',
+          exception_type: 'RuntimeError',
+          traceback: [],
+          ...detail
+        }
+      })
+    )
+  }
+
+  function fireExecutionStart(jobId: string) {
+    const handler = apiEventHandlers.get('execution_start')
+    if (!handler) throw new Error('execution_start handler not bound')
+    handler(
+      new CustomEvent('execution_start', { detail: { prompt_id: jobId } })
+    )
+  }
+
+  const cloudValidationMessage = JSON.stringify({
+    error: { type: 'prompt_outputs_failed_validation', message: 'invalid' },
+    node_errors: {
+      '1': {
+        errors: [
+          {
+            type: 'value_bigger_than_max',
+            message: 'Value 200 bigger than max of 100',
+            details: 'steps',
+            extra_info: { input_name: 'steps' }
+          }
+        ],
+        dependent_outputs: [],
+        class_type: 'KSampler'
+      }
+    }
+  })
+
+  beforeEach(() => {
+    apiEventHandlers.clear()
+    Object.assign(useWorkflowStore(), { openWorkflows: [workflowA, workflowB] })
+    store = useExecutionStore()
+    errorStore = useExecutionErrorStore()
+    store.bindExecutionEvents()
+    // Workflow A is the one on screen; workflow B runs in the background.
+    errorStore.setActiveGraph(graphAId, workflowA.path)
+  })
+
+  it('keeps a background run failure off the visible workflow', () => {
+    callStoreJob('job-b', workflowB)
+    fireExecutionError('job-b')
+
+    expect(errorStore.lastExecutionError).toBeNull()
+  })
+
+  it('surfaces the background failure after switching to its workflow', () => {
+    callStoreJob('job-b', workflowB)
+    fireExecutionError('job-b')
+
+    errorStore.setActiveGraph(graphBId, workflowB.path)
+
+    expect(errorStore.lastExecutionError?.prompt_id).toBe('job-b')
+  })
+
+  it('still records a failure produced by the visible workflow', () => {
+    callStoreJob('job-a', workflowA)
+    fireExecutionError('job-a')
+
+    expect(errorStore.lastExecutionError?.prompt_id).toBe('job-a')
+  })
+
+  it('routes background validation node errors to their own workflow', () => {
+    callStoreJob('job-b', workflowB)
+    fireExecutionError('job-b', {
+      exception_message: cloudValidationMessage,
+      exception_type: 'ValidationError'
+    })
+
+    expect(errorStore.lastNodeErrors).toBeNull()
+
+    errorStore.setActiveGraph(graphBId, workflowB.path)
+    expect(Object.keys(errorStore.lastNodeErrors ?? {})).toEqual(['1'])
+  })
+
+  it('routes a background service-level error to its own workflow', () => {
+    callStoreJob('job-b', workflowB)
+    fireExecutionError('job-b', {
+      node_id: '',
+      exception_message: 'Job has stagnated',
+      exception_type: 'StagnationError'
+    })
+
+    expect(errorStore.lastPromptError).toBeNull()
+
+    errorStore.setActiveGraph(graphBId, workflowB.path)
+    expect(errorStore.lastPromptError?.message).toContain('Job has stagnated')
+  })
+
+  it('falls back to the queue-derived workflow id for jobs from a previous page load', () => {
+    // No storeJob: the job predates this session, so only the polled
+    // queue/history mapping identifies its workflow.
+    store.registerJobWorkflowIdMapping('job-b', graphBId)
+    fireExecutionError('job-b')
+
+    expect(errorStore.lastExecutionError).toBeNull()
+
+    errorStore.setActiveGraph(graphBId, workflowB.path)
+    expect(errorStore.lastExecutionError?.prompt_id).toBe('job-b')
+  })
+
+  it('resets the active job and flushes its buffered failure after mapping', () => {
+    fireExecutionStart('job-b')
+    fireExecutionError('job-b')
+
+    expect(store.isIdle).toBe(true)
+
+    store.registerJobWorkflowIdMapping('job-b', graphBId)
+
+    expect(errorStore.lastExecutionError).toBeNull()
+
+    errorStore.setActiveGraph(graphBId, workflowB.path)
+    expect(errorStore.lastExecutionError?.prompt_id).toBe('job-b')
+  })
+
+  it('does not replay a buffered failure after execution succeeds', () => {
+    fireExecutionError('job-b')
+    api.dispatchCustomEvent('execution_success', {
+      prompt_id: 'job-b',
+      timestamp: 0
+    })
+
+    store.registerJobWorkflowIdMapping('job-b', graphBId)
+    errorStore.setActiveGraph(graphBId, workflowB.path)
+
+    expect(errorStore.lastExecutionError).toBeNull()
+  })
+
+  it('does not replay a buffered failure after execution is interrupted', () => {
+    fireExecutionError('job-b')
+    api.dispatchCustomEvent('execution_interrupted', {
+      prompt_id: 'job-b',
+      timestamp: 0,
+      node_id: '1',
+      node_type: 'TestNode',
+      executed: []
+    })
+
+    store.registerJobWorkflowIdMapping('job-b', graphBId)
+    errorStore.setActiveGraph(graphBId, workflowB.path)
+
+    expect(errorStore.lastExecutionError).toBeNull()
+  })
+
+  it('clears execution-start errors only for the producing workflow', () => {
+    errorStore.recordPromptError({
+      type: 'visible-error',
+      message: 'visible workflow failed',
+      details: ''
+    })
+    callStoreJob('job-b', workflowB)
+    errorStore.setActiveGraph(graphBId, workflowB.path)
+    errorStore.recordPromptError({
+      type: 'background-error',
+      message: 'background workflow failed',
+      details: ''
+    })
+    errorStore.setActiveGraph(graphAId, workflowA.path)
+
+    fireExecutionStart('job-b')
+
+    expect(errorStore.lastPromptError?.type).toBe('visible-error')
+    errorStore.setActiveGraph(graphBId, workflowB.path)
+    expect(errorStore.lastPromptError).toBeNull()
+  })
+
+  it('buffers a mapped job with an ambiguous path until storeJob', () => {
+    const duplicateWorkflow = makeWorkflow('/workflows/c.json', graphBId)
+    Object.assign(useWorkflowStore(), {
+      openWorkflows: [workflowA, workflowB, duplicateWorkflow]
+    })
+    store.registerJobWorkflowIdMapping('job-ambiguous', graphBId)
+
+    fireExecutionError('job-ambiguous')
+
+    expect(errorStore.lastExecutionError).toBeNull()
+
+    callStoreJob('job-ambiguous', workflowB)
+    errorStore.setActiveGraph(graphBId, workflowB.path)
+
+    expect(errorStore.lastExecutionError?.prompt_id).toBe('job-ambiguous')
+  })
+
+  it('does not route an unattributable failure to the visible workflow', () => {
+    fireExecutionError('job-unknown')
+
+    expect(errorStore.lastExecutionError).toBeNull()
+  })
+
+  it('routes a failure under the active graph id, not the initial one', () => {
+    const reloadedWorkflow = makeWorkflow(
+      '/workflows/c.json',
+      graphCId,
+      graphDId
+    )
+    Object.assign(useWorkflowStore(), {
+      openWorkflows: [workflowA, reloadedWorkflow]
+    })
+    callStoreJob('job-c', reloadedWorkflow)
+
+    fireExecutionError('job-c')
+
+    errorStore.setActiveGraph(graphDId, reloadedWorkflow.path)
+    expect(errorStore.lastExecutionError).toBeNull()
+
+    errorStore.setActiveGraph(graphCId, reloadedWorkflow.path)
+    expect(errorStore.lastExecutionError?.prompt_id).toBe('job-c')
+  })
+
+  it('falls back to the initial graph id when there is no active state', () => {
+    const unloadedWorkflow = makeWorkflow(
+      '/workflows/e.json',
+      undefined,
+      graphEId
+    )
+    Object.assign(useWorkflowStore(), {
+      openWorkflows: [workflowA, unloadedWorkflow]
+    })
+    callStoreJob('job-e', unloadedWorkflow)
+
+    fireExecutionError('job-e')
+
+    errorStore.setActiveGraph(graphEId, unloadedWorkflow.path)
+    expect(errorStore.lastExecutionError?.prompt_id).toBe('job-e')
+  })
+
+  it('buffers a failure from a workflow with no graph id until one arrives', () => {
+    const idlessWorkflow = makeWorkflow('/workflows/f.json')
+    Object.assign(useWorkflowStore(), {
+      openWorkflows: [workflowA, idlessWorkflow]
+    })
+    callStoreJob('job-f', idlessWorkflow)
+
+    fireExecutionError('job-f')
+    expect(errorStore.lastExecutionError).toBeNull()
+
+    store.registerJobWorkflowIdMapping('job-f', graphFId)
+    errorStore.setActiveGraph(graphFId, idlessWorkflow.path)
+
+    expect(errorStore.lastExecutionError?.prompt_id).toBe('job-f')
+  })
+})
+
+describe('useExecutionStore - clearActiveJobIfStale', () => {
+  let store: ReturnType<typeof useExecutionStore>
+
+  beforeEach(() => {
+    store = useExecutionStore()
+  })
+
+  it('clears the active job and progress state when not in the active set', () => {
+    store.activeJobId = 'job-1'
+    store.queuedJobs = { 'job-1': { nodes: { 'node-1': false } } }
+    store.nodeProgressStates = {
+      'node-1': {
+        value: 5,
+        max: 10,
+        state: 'running',
+        node_id: 'node-1',
+        display_node_id: 'node-1',
+        prompt_id: 'job-1'
+      }
+    }
+
+    store.clearActiveJobIfStale(new Set(['job-2']))
+
+    expect(store.activeJobId).toBeNull()
+    expect(store.queuedJobs['job-1']).toBeUndefined()
+    expect(store.nodeProgressStates).toEqual({})
+  })
+
+  it('preserves the active job when present in the active set', () => {
+    store.activeJobId = 'job-1'
+    store.queuedJobs = { 'job-1': { nodes: {} } }
+
+    store.clearActiveJobIfStale(new Set(['job-1', 'job-2']))
+
+    expect(store.activeJobId).toBe('job-1')
+    expect(store.queuedJobs['job-1']).toBeDefined()
+  })
+
+  it('is a no-op when there is no active job', () => {
+    store.activeJobId = null
+    store.queuedJobs = { other: { nodes: {} } }
+
+    store.clearActiveJobIfStale(new Set())
+
+    expect(store.activeJobId).toBeNull()
+    expect(store.queuedJobs['other']).toBeDefined()
+  })
+})
+
+describe('session workflow paths on workflow rename', () => {
+  let store: ReturnType<typeof useExecutionStore>
+
+  beforeEach(() => {
+    store = useExecutionStore()
+  })
+
+  async function renameWorkflow(workflow: ComfyWorkflow, newPath: string) {
+    vi.spyOn(workflow, 'rename').mockImplementation(async (renamedPath) => {
+      workflow.path = renamedPath
+      return workflow
+    })
+    await useWorkflowStore().renameWorkflow(workflow, newPath)
+  }
+
+  it('rewrites every job of the renamed workflow instance', async () => {
+    const renamed = useWorkflowStore().createTemporary('old.app.json')
+    const other = useWorkflowStore().createTemporary('keep.app.json')
+    store.ensureSessionWorkflowPath('job-1', renamed.path, renamed.instanceId)
+    store.ensureSessionWorkflowPath('job-2', other.path, other.instanceId)
+    store.ensureSessionWorkflowPath('job-3', renamed.path, renamed.instanceId)
+
+    await renameWorkflow(renamed, 'workflows/new.app.json')
+
+    expect(Object.fromEntries(store.jobIdToSessionWorkflowPath)).toEqual({
+      'job-1': 'workflows/new.app.json',
+      'job-2': 'workflows/keep.app.json',
+      'job-3': 'workflows/new.app.json'
+    })
+  })
+
+  it('does not rewrite jobs of another workflow sharing the path and graph id', async () => {
+    const graph = { ...defaultGraph, id: 'duplicate-workflow-id' }
+    const older = useWorkflowStore().createTemporary('Unsaved.json', graph)
+    const newer = useWorkflowStore().createTemporary('Unsaved.json', graph)
+    store.ensureSessionWorkflowPath('job-old', older.path, older.instanceId)
+    store.ensureSessionWorkflowPath('job-new', older.path, newer.instanceId)
+
+    await renameWorkflow(newer, 'workflows/saved.app.json')
+
+    expect(Object.fromEntries(store.jobIdToSessionWorkflowPath)).toEqual({
+      'job-old': older.path,
+      'job-new': 'workflows/saved.app.json'
+    })
+  })
+
+  it('keeps the same map when no job belongs to the renamed workflow', async () => {
+    const renamed = useWorkflowStore().createTemporary('old.app.json')
+    store.ensureSessionWorkflowPath('job-1', 'workflows/keep.app.json')
+    const originalMap = store.jobIdToSessionWorkflowPath
+
+    await renameWorkflow(renamed, 'workflows/new.app.json')
+
+    expect(store.jobIdToSessionWorkflowPath).toBe(originalMap)
+  })
+})
+
+describe('useExecutionErrorStore - Node Error Lookups', () => {
+  let store: ReturnType<typeof useExecutionErrorStore>
+
+  beforeEach(() => {
+    store = useExecutionErrorStore()
+  })
+
+  describe('getNodeErrors', () => {
+    it('should return undefined when no errors exist', () => {
+      const result = store.getNodeErrors(
+        createNodeLocatorId(null, toNodeId(123))
+      )
+      expect(result).toBeUndefined()
+    })
+
+    it('should return node error by locator ID for root graph node', () => {
+      store.recordNodeErrors({
+        '123': {
+          errors: [
+            {
+              type: 'validation_error',
+              message: 'Invalid input',
+              details: 'Width must be positive',
+              extra_info: { input_name: 'width' }
+            }
+          ],
+          class_type: 'TestNode',
+          dependent_outputs: []
+        }
+      })
+
+      const result = store.getNodeErrors(
+        createNodeLocatorId(null, toNodeId(123))
+      )
+      expect(result).toBeDefined()
+      expect(result?.errors).toHaveLength(1)
+      expect(result?.errors[0].message).toBe('Invalid input')
+    })
+
+    it('should return node error by locator ID for subgraph node', () => {
+      const subgraphUuid = 'a1b2c3d4-e5f6-7890-abcd-ef1234567890'
+      const mockSubgraph = createTestSubgraph(456)
+
+      const mockNode = createMockLGraphNode({
+        id: 123,
+        isSubgraphNode: () => true,
+        subgraph: mockSubgraph
+      })
+
+      vi.mocked(app.rootGraph.getNodeById).mockReturnValue(mockNode)
+
+      store.recordNodeErrors({
+        '123:456': {
+          errors: [
+            {
+              type: 'validation_error',
+              message: 'Invalid subgraph input',
+              details: 'Missing required input',
+              extra_info: { input_name: 'image' }
+            }
+          ],
+          class_type: 'SubgraphNode',
+          dependent_outputs: []
+        }
+      })
+
+      const locatorId = createNodeLocatorId(subgraphUuid, toNodeId(456))
+      const result = store.getNodeErrors(locatorId)
+      expect(result).toBeDefined()
+      expect(result?.errors[0].message).toBe('Invalid subgraph input')
+    })
+  })
+
+  describe('slotHasError', () => {
+    it('should return false when node has no errors', () => {
+      const result = store.slotHasError(
+        createNodeLocatorId(null, toNodeId(123)),
+        'width'
+      )
+      expect(result).toBe(false)
+    })
+
+    it('should return false when node has errors but slot is not mentioned', () => {
+      store.recordNodeErrors({
+        '123': {
+          errors: [
+            {
+              type: 'validation_error',
+              message: 'Invalid input',
+              details: 'Width must be positive',
+              extra_info: { input_name: 'width' }
+            }
+          ],
+          class_type: 'TestNode',
+          dependent_outputs: []
+        }
+      })
+
+      const result = store.slotHasError(
+        createNodeLocatorId(null, toNodeId(123)),
+        'height'
+      )
+      expect(result).toBe(false)
+    })
+
+    it('should return true when slot has error', () => {
+      store.recordNodeErrors({
+        '123': {
+          errors: [
+            {
+              type: 'validation_error',
+              message: 'Invalid input',
+              details: 'Width must be positive',
+              extra_info: { input_name: 'width' }
+            }
+          ],
+          class_type: 'TestNode',
+          dependent_outputs: []
+        }
+      })
+
+      const result = store.slotHasError(
+        createNodeLocatorId(null, toNodeId(123)),
+        'width'
+      )
+      expect(result).toBe(true)
+    })
+
+    it('should return true when multiple errors exist for the same slot', () => {
+      store.recordNodeErrors({
+        '123': {
+          errors: [
+            {
+              type: 'validation_error',
+              message: 'Invalid input',
+              details: 'Width must be positive',
+              extra_info: { input_name: 'width' }
+            },
+            {
+              type: 'validation_error',
+              message: 'Invalid range',
+              details: 'Width must be less than 1000',
+              extra_info: { input_name: 'width' }
+            }
+          ],
+          class_type: 'TestNode',
+          dependent_outputs: []
+        }
+      })
+
+      const result = store.slotHasError(
+        createNodeLocatorId(null, toNodeId(123)),
+        'width'
+      )
+      expect(result).toBe(true)
+    })
+
+    it('should handle errors without extra_info', () => {
+      store.recordNodeErrors({
+        '123': {
+          errors: [
+            {
+              type: 'validation_error',
+              message: 'General error',
+              details: 'Something went wrong'
+            }
+          ],
+          class_type: 'TestNode',
+          dependent_outputs: []
+        }
+      })
+
+      const result = store.slotHasError(
+        createNodeLocatorId(null, toNodeId(123)),
+        'width'
+      )
+      expect(result).toBe(false)
+    })
+  })
+})
+
+describe('useExecutionStore - executingNode with subgraphs', () => {
+  let store: ReturnType<typeof useExecutionStore>
+
+  beforeEach(() => {
+    store = useExecutionStore()
+  })
+
+  it('should find executing node info in root graph from queued prompt data', () => {
+    store.storeJob({
+      id: 'test-prompt',
+      nodes: ['123'],
+      promptOutput: {
+        '123': createPromptNode('Test Node', 'TestNode')
+      },
+      workflow: createQueuedWorkflow(),
+      mode: 'graph'
+    })
+    store.activeJobId = 'test-prompt'
+
+    store.nodeProgressStates = {
+      '123': {
+        state: 'running',
+        value: 0,
+        max: 100,
+        display_node_id: '123',
+        prompt_id: 'test-prompt',
+        node_id: '123'
+      }
+    }
+
+    expect(store.executingNode).toEqual({
+      title: 'Test Node',
+      type: 'TestNode'
+    })
+  })
+
+  it('should find executing node info in subgraph using execution ID', () => {
+    store.storeJob({
+      id: 'test-prompt',
+      nodes: ['456:789'],
+      promptOutput: {
+        '456:789': createPromptNode('Nested Node', 'NestedNode')
+      },
+      workflow: createQueuedWorkflow(),
+      mode: 'graph'
+    })
+    store.activeJobId = 'test-prompt'
+
+    store.nodeProgressStates = {
+      '456:789': {
+        state: 'running',
+        value: 0,
+        max: 100,
+        display_node_id: '456:789',
+        prompt_id: 'test-prompt',
+        node_id: '456:789'
+      }
+    }
+
+    expect(store.executingNode).toEqual({
+      title: 'Nested Node',
+      type: 'NestedNode'
+    })
+  })
+
+  it('should return null when no node is executing', () => {
+    store.nodeProgressStates = {}
+
+    expect(store.executingNode).toBeNull()
+  })
+
+  it('should return null when executing node metadata cannot be found', () => {
+    store.storeJob({
+      id: 'test-prompt',
+      nodes: ['123'],
+      promptOutput: {
+        '123': createPromptNode('Test Node', 'TestNode')
+      },
+      workflow: createQueuedWorkflow(),
+      mode: 'graph'
+    })
+    store.activeJobId = 'test-prompt'
+
+    store.nodeProgressStates = {
+      '999': {
+        state: 'running',
+        value: 0,
+        max: 100,
+        display_node_id: '999',
+        prompt_id: 'test-prompt',
+        node_id: '999'
+      }
+    }
+
+    expect(store.executingNode).toBeNull()
+  })
+})
+
+describe('useMissingNodesErrorStore - setMissingNodeTypes', () => {
+  let store: ReturnType<typeof useMissingNodesErrorStore>
+
+  beforeEach(() => {
+    store = useMissingNodesErrorStore()
+  })
+
+  it('clears missingNodesError when called with an empty array', () => {
+    store.setMissingNodeTypes([{ type: 'NodeA' }])
+    store.setMissingNodeTypes([])
+    expect(store.missingNodesError).toBeNull()
+  })
+
+  it('hasMissingNodes is false when error is null', () => {
+    store.setMissingNodeTypes([])
+    expect(store.hasMissingNodes).toBe(false)
+  })
+
+  it('hasMissingNodes is true after setting non-empty types', () => {
+    store.setMissingNodeTypes([{ type: 'NodeA' }])
+    expect(store.hasMissingNodes).toBe(true)
+  })
+
+  it('deduplicates string entries by value', () => {
+    store.setMissingNodeTypes(['GroupNode', 'GroupNode', 'OtherGroup'])
+    expect(store.missingNodesError?.nodeTypes).toHaveLength(2)
+    expect(store.missingNodesError?.nodeTypes).toEqual([
+      'GroupNode',
+      'OtherGroup'
+    ])
+  })
+
+  it('keeps a single string entry unchanged', () => {
+    store.setMissingNodeTypes(['GroupNode'])
+    expect(store.missingNodesError?.nodeTypes).toHaveLength(1)
+  })
+
+  it('deduplicates object entries with the same nodeId', () => {
+    store.setMissingNodeTypes([
+      { type: 'NodeA', nodeId: toNodeId(1) },
+      { type: 'NodeA', nodeId: toNodeId(1) }
+    ])
+    expect(store.missingNodesError?.nodeTypes).toHaveLength(1)
+  })
+
+  it('keeps object entries with different nodeIds even if same type', () => {
+    store.setMissingNodeTypes([
+      { type: 'NodeA', nodeId: toNodeId(1) },
+      { type: 'NodeA', nodeId: toNodeId(2) }
+    ])
+    expect(store.missingNodesError?.nodeTypes).toHaveLength(2)
+  })
+
+  it('deduplicates object entries by type when nodeId is absent', () => {
+    store.setMissingNodeTypes([{ type: 'NodeB' }, { type: 'NodeB' }])
+    expect(store.missingNodesError?.nodeTypes).toHaveLength(1)
+  })
+
+  it('keeps distinct types when nodeId is absent', () => {
+    store.setMissingNodeTypes([{ type: 'NodeB' }, { type: 'NodeC' }])
+    expect(store.missingNodesError?.nodeTypes).toHaveLength(2)
+  })
+
+  it('treats absent nodeId the same as type-only key (falls back to type)', () => {
+    store.setMissingNodeTypes([{ type: 'NodeD' }, { type: 'NodeD' }])
+    expect(store.missingNodesError?.nodeTypes).toHaveLength(1)
+  })
+
+  it('handles a mix of string and object entries correctly', () => {
+    store.setMissingNodeTypes([
+      'GroupNode',
+      'GroupNode', // string dup
+      { type: 'NodeA', nodeId: toNodeId(1) },
+      { type: 'NodeA', nodeId: toNodeId(1) }, // object dup by nodeId
+      { type: 'NodeA', nodeId: toNodeId(2) }, // same type, different nodeId → kept
+      { type: 'NodeB' },
+      { type: 'NodeB' } // object dup by type
+    ])
+    // Unique: 'GroupNode', {NodeA,1}, {NodeA,2}, {NodeB} → 4
+    expect(store.missingNodesError?.nodeTypes).toHaveLength(4)
+  })
+
+  it('stores a non-empty message string in missingNodesError', () => {
+    store.setMissingNodeTypes([{ type: 'NodeA' }])
+    expect(typeof store.missingNodesError?.message).toBe('string')
+    expect(store.missingNodesError!.message.length).toBeGreaterThan(0)
+  })
+
+  it('stores the deduplicated nodeTypes array in missingNodesError', () => {
+    const input = [{ type: 'NodeA' }, { type: 'NodeB' }]
+    store.setMissingNodeTypes(input)
+    expect(store.missingNodesError?.nodeTypes).toEqual(input)
+  })
+})
+
+describe('useExecutionStore - RAF batching', () => {
+  let store: ReturnType<typeof useExecutionStore>
+
+  function getRegisteredHandler(eventName: string) {
+    const calls = vi.mocked(api.addEventListener).mock.calls
+    const call = calls.find(([name]) => name === eventName)
+    return call![1]!
+  }
+
+  beforeEach(() => {
+    store = useExecutionStore()
+    store.bindExecutionEvents()
+  })
+
+  describe('handleProgress', () => {
+    function makeProgressEvent(value: number, max: number): CustomEvent {
+      return new CustomEvent('progress', {
+        detail: { value, max, prompt_id: 'job-1', node: '1' }
+      })
+    }
+
+    it('batches multiple progress events into one reactive update per frame', () => {
+      const handler = getRegisteredHandler('progress')
+
+      handler(makeProgressEvent(1, 10))
+      handler(makeProgressEvent(5, 10))
+      handler(makeProgressEvent(9, 10))
+
+      expect(store._executingNodeProgress).toBeNull()
+
+      vi.advanceTimersToNextFrame()
+
+      expect(store._executingNodeProgress).toEqual({
+        value: 9,
+        max: 10,
+        prompt_id: 'job-1',
+        node: '1'
+      })
+    })
+
+    it('does not update reactive state before RAF fires', () => {
+      expect.assertions(1)
+      const handler = getRegisteredHandler('progress')
+
+      handler(makeProgressEvent(3, 10))
+
+      expect(store._executingNodeProgress).toBeNull()
+    })
+
+    it('allows a new batch after the previous RAF fires', () => {
+      const handler = getRegisteredHandler('progress')
+
+      handler(makeProgressEvent(1, 10))
+      vi.advanceTimersToNextFrame()
+
+      expect(store._executingNodeProgress).toEqual(
+        expect.objectContaining({ value: 1 })
+      )
+
+      handler(makeProgressEvent(7, 10))
+      vi.advanceTimersToNextFrame()
+
+      expect(store._executingNodeProgress).toEqual(
+        expect.objectContaining({ value: 7 })
+      )
+    })
+  })
+
+  describe('handleProgressState', () => {
+    function makeProgressStateEvent(
+      nodeId: string,
+      state: string,
+      value = 0,
+      max = 10
+    ): CustomEvent {
+      return new CustomEvent('progress_state', {
+        detail: {
+          prompt_id: 'job-1',
+          nodes: {
+            [nodeId]: {
+              value,
+              max,
+              state,
+              node_id: nodeId,
+              prompt_id: 'job-1',
+              display_node_id: nodeId
+            }
+          }
+        }
+      })
+    }
+
+    it('batches multiple progress_state events into one reactive update per frame', () => {
+      const handler = getRegisteredHandler('progress_state')
+
+      handler(makeProgressStateEvent('1', 'running', 1))
+      handler(makeProgressStateEvent('1', 'running', 5))
+      handler(makeProgressStateEvent('1', 'running', 9))
+
+      expect(Object.keys(store.nodeProgressStates)).toHaveLength(0)
+
+      vi.advanceTimersToNextFrame()
+
+      expect(store.nodeProgressStates['1']).toEqual(
+        expect.objectContaining({ value: 9, state: 'running' })
+      )
+    })
+
+    it('does not update reactive state before RAF fires', () => {
+      expect.assertions(1)
+      const handler = getRegisteredHandler('progress_state')
+
+      handler(makeProgressStateEvent('1', 'running'))
+
+      expect(Object.keys(store.nodeProgressStates)).toHaveLength(0)
+    })
+
+    it('accepts a snapshot that omits the previously executing node', () => {
+      const handler = getRegisteredHandler('progress_state')
+      handler(makeProgressStateEvent('1', 'running'))
+      vi.advanceTimersToNextFrame()
+
+      handler(
+        new CustomEvent('progress_state', {
+          detail: { prompt_id: 'job-1', nodes: {} }
+        })
+      )
+
+      expect(() => vi.advanceTimersToNextFrame()).not.toThrow()
+      expect(store.nodeProgressStates).toEqual({})
+    })
+  })
+
+  describe('pending RAF is discarded when execution completes', () => {
+    it('discards pending progress RAF on execution_success', () => {
+      expect.assertions(1)
+      const progressHandler = getRegisteredHandler('progress')
+      const startHandler = getRegisteredHandler('execution_start')
+      const successHandler = getRegisteredHandler('execution_success')
+
+      startHandler(
+        new CustomEvent('execution_start', {
+          detail: { prompt_id: 'job-1', timestamp: 0 }
+        })
+      )
+
+      progressHandler(
+        new CustomEvent('progress', {
+          detail: { value: 5, max: 10, prompt_id: 'job-1', node: '1' }
+        })
+      )
+
+      successHandler(
+        new CustomEvent('execution_success', {
+          detail: { prompt_id: 'job-1', timestamp: 0 }
+        })
+      )
+
+      vi.advanceTimersToNextFrame()
+
+      expect(store._executingNodeProgress).toBeNull()
+    })
+
+    it('discards pending progress_state RAF on execution_success', () => {
+      expect.assertions(1)
+      const progressStateHandler = getRegisteredHandler('progress_state')
+      const startHandler = getRegisteredHandler('execution_start')
+      const successHandler = getRegisteredHandler('execution_success')
+
+      startHandler(
+        new CustomEvent('execution_start', {
+          detail: { prompt_id: 'job-1', timestamp: 0 }
+        })
+      )
+
+      progressStateHandler(
+        new CustomEvent('progress_state', {
+          detail: {
+            prompt_id: 'job-1',
+            nodes: {
+              '1': {
+                value: 5,
+                max: 10,
+                state: 'running',
+                node_id: '1',
+                prompt_id: 'job-1',
+                display_node_id: '1'
+              }
+            }
+          }
+        })
+      )
+
+      successHandler(
+        new CustomEvent('execution_success', {
+          detail: { prompt_id: 'job-1', timestamp: 0 }
+        })
+      )
+
+      vi.advanceTimersToNextFrame()
+
+      expect(Object.keys(store.nodeProgressStates)).toHaveLength(0)
+    })
+
+    it('discards pending progress RAF on execution_error', () => {
+      expect.assertions(1)
+      const progressHandler = getRegisteredHandler('progress')
+      const startHandler = getRegisteredHandler('execution_start')
+      const errorHandler = getRegisteredHandler('execution_error')
+
+      startHandler(
+        new CustomEvent('execution_start', {
+          detail: { prompt_id: 'job-1', timestamp: 0 }
+        })
+      )
+
+      progressHandler(
+        new CustomEvent('progress', {
+          detail: { value: 5, max: 10, prompt_id: 'job-1', node: '1' }
+        })
+      )
+
+      errorHandler(
+        new CustomEvent('execution_error', {
+          detail: {
+            prompt_id: 'job-1',
+            node_id: '1',
+            node_type: 'TestNode',
+            exception_message: 'error',
+            exception_type: 'RuntimeError',
+            traceback: []
+          }
+        })
+      )
+
+      vi.advanceTimersToNextFrame()
+
+      expect(store._executingNodeProgress).toBeNull()
+    })
+
+    it('discards pending progress RAF on execution_interrupted', () => {
+      expect.assertions(1)
+      const progressHandler = getRegisteredHandler('progress')
+      const startHandler = getRegisteredHandler('execution_start')
+      const interruptedHandler = getRegisteredHandler('execution_interrupted')
+
+      startHandler(
+        new CustomEvent('execution_start', {
+          detail: { prompt_id: 'job-1', timestamp: 0 }
+        })
+      )
+
+      progressHandler(
+        new CustomEvent('progress', {
+          detail: { value: 5, max: 10, prompt_id: 'job-1', node: '1' }
+        })
+      )
+
+      interruptedHandler(
+        new CustomEvent('execution_interrupted', {
+          detail: {
+            prompt_id: 'job-1',
+            node_id: '1',
+            node_type: 'TestNode',
+            executed: []
+          }
+        })
+      )
+
+      vi.advanceTimersToNextFrame()
+
+      expect(store._executingNodeProgress).toBeNull()
+    })
+  })
+
+  describe('unbindExecutionEvents cancels pending RAFs', () => {
+    it('cancels pending progress RAF on unbind', () => {
+      expect.assertions(1)
+      const handler = getRegisteredHandler('progress')
+
+      handler(
+        new CustomEvent('progress', {
+          detail: { value: 5, max: 10, prompt_id: 'job-1', node: '1' }
+        })
+      )
+
+      store.unbindExecutionEvents()
+      vi.advanceTimersToNextFrame()
+
+      expect(store._executingNodeProgress).toBeNull()
+    })
+
+    it('cancels pending progress_state RAF on unbind', () => {
+      expect.assertions(1)
+      const handler = getRegisteredHandler('progress_state')
+
+      handler(
+        new CustomEvent('progress_state', {
+          detail: {
+            prompt_id: 'job-1',
+            nodes: {
+              '1': {
+                value: 0,
+                max: 10,
+                state: 'running',
+                node_id: '1',
+                prompt_id: 'job-1',
+                display_node_id: '1'
+              }
+            }
+          }
+        })
+      )
+
+      store.unbindExecutionEvents()
+      vi.advanceTimersToNextFrame()
+
+      expect(Object.keys(store.nodeProgressStates)).toHaveLength(0)
+    })
+  })
+
+  describe('executing preserves node progress state', () => {
+    it('applies the initial running state when executing follows in the same frame', () => {
+      expect.assertions(1)
+      const startHandler = getRegisteredHandler('execution_start')
+      const progressStateHandler = getRegisteredHandler('progress_state')
+      const executingHandler = getRegisteredHandler('executing')
+
+      startHandler(
+        new CustomEvent('execution_start', {
+          detail: { prompt_id: 'job-1', timestamp: 0 }
+        })
+      )
+      progressStateHandler(
+        new CustomEvent('progress_state', {
+          detail: {
+            prompt_id: 'job-1',
+            nodes: {
+              '1': {
+                value: 0,
+                max: 10,
+                state: 'running',
+                node_id: '1',
+                prompt_id: 'job-1',
+                display_node_id: '1'
+              }
+            }
+          }
+        })
+      )
+
+      executingHandler(new CustomEvent('executing', { detail: '1' }))
+      vi.advanceTimersToNextFrame()
+
+      expect(store.nodeProgressStates['1']).toEqual(
+        expect.objectContaining({ state: 'running' })
+      )
+    })
+
+    it('discards a pending node progress state when execution stops', () => {
+      expect.assertions(1)
+      const progressStateHandler = getRegisteredHandler('progress_state')
+      const executingHandler = apiEventHandlers.get('executing')!
+
+      progressStateHandler(
+        new CustomEvent('progress_state', {
+          detail: {
+            prompt_id: 'job-1',
+            nodes: {
+              '1': {
+                value: 0,
+                max: 10,
+                state: 'running',
+                node_id: '1',
+                prompt_id: 'job-1',
+                display_node_id: '1'
+              }
+            }
+          }
+        })
+      )
+
+      executingHandler(new CustomEvent('executing', { detail: null }))
+      vi.advanceTimersToNextFrame()
+
+      expect(Object.keys(store.nodeProgressStates)).toHaveLength(0)
+    })
+  })
+
+  describe('concurrent progress and progress_state in the same frame', () => {
+    it('applies both coalesced updates when RAFs fire in the same tick', () => {
+      expect.assertions(2)
+      const progressHandler = getRegisteredHandler('progress')
+      const progressStateHandler = getRegisteredHandler('progress_state')
+
+      progressHandler(
+        new CustomEvent('progress', {
+          detail: { value: 7, max: 10, prompt_id: 'job-1', node: '1' }
+        })
+      )
+      progressStateHandler(
+        new CustomEvent('progress_state', {
+          detail: {
+            prompt_id: 'job-1',
+            nodes: {
+              '1': {
+                value: 7,
+                max: 10,
+                state: 'running',
+                node_id: '1',
+                prompt_id: 'job-1',
+                display_node_id: '1'
+              }
+            }
+          }
+        })
+      )
+
+      vi.advanceTimersToNextFrame()
+
+      expect(store._executingNodeProgress).toEqual(
+        expect.objectContaining({ value: 7 })
+      )
+      expect(store.nodeProgressStates['1']).toEqual(
+        expect.objectContaining({ value: 7, state: 'running' })
+      )
+    })
+  })
+})
+
+describe('useExecutionStore - WebSocket event handlers', () => {
+  let store: ReturnType<typeof useExecutionStore>
+
+  function fire(event: string, detail: unknown) {
+    const handler = apiEventHandlers.get(event)
+    if (!handler) throw new Error(`${event} handler not bound`)
+    handler(new CustomEvent(event, { detail }))
+  }
+
+  function storeVisibleJob(jobId: string) {
+    const workflow = createQueuedWorkflow()
+    useWorkflowStore().activeWorkflow = workflow
+    Object.assign(useWorkflowStore(), { openWorkflows: [workflow] })
+    useExecutionErrorStore().setActiveGraph(
+      workflow.activeState.id!,
+      workflow.path
+    )
+    store.storeJob({
+      nodes: [],
+      id: jobId,
+      promptOutput: {},
+      workflow,
+      mode: 'graph'
+    })
+  }
+
+  beforeEach(() => {
+    apiEventHandlers.clear()
+    store = useExecutionStore()
+    store.bindExecutionEvents()
+  })
+
+  describe('execution_start', () => {
+    it('sets activeJobId and seeds an empty queued job entry', () => {
+      fire('execution_start', { prompt_id: 'job-1', timestamp: 0 })
+
+      expect(store.activeJobId).toBe('job-1')
+      expect(store.queuedJobs['job-1']).toEqual({
+        nodes: {},
+        executionStartedAt: expect.any(Number)
+      })
+    })
+
+    it('clears transient errors while preserving validation errors', () => {
+      const errorStore = useExecutionErrorStore()
+      storeVisibleJob('job-1')
+      const nodeErrors = {
+        '1': {
+          class_type: 'Test',
+          dependent_outputs: [],
+          errors: [
+            {
+              type: 'required_input_missing',
+              message: 'Missing',
+              details: '',
+              extra_info: { input_name: 'x' }
+            }
+          ]
+        }
+      }
+      errorStore.recordExecutionError({
+        prompt_id: 'old-job',
+        timestamp: 0,
+        node_id: '1',
+        node_type: 'Test',
+        executed: [],
+        exception_message: 'boom',
+        exception_type: 'RuntimeError',
+        traceback: []
+      })
+      errorStore.recordPromptError({
+        type: 'old-error',
+        message: 'old prompt error',
+        details: ''
+      })
+      errorStore.recordNodeErrors(nodeErrors)
+      errorStore.showErrorOverlay()
+
+      fire('execution_start', { prompt_id: 'job-1', timestamp: 0 })
+
+      expect(errorStore.lastExecutionError).toBeNull()
+      expect(errorStore.lastPromptError).toBeNull()
+      expect(errorStore.lastNodeErrors).toEqual(nodeErrors)
+      expect(errorStore.isErrorOverlayOpen).toBe(true)
+    })
+
+    it('clears initializing state for the starting job', () => {
+      store.initializingJobIds = new Set(['job-1', 'job-2'])
+      fire('execution_start', { prompt_id: 'job-1', timestamp: 0 })
+
+      expect(store.initializingJobIds.has('job-1')).toBe(false)
+      expect(store.initializingJobIds.has('job-2')).toBe(true)
+    })
+  })
+
+  describe('execution_cached', () => {
+    it('marks the listed nodes as cached on the active job', () => {
+      fire('execution_start', { prompt_id: 'job-1', timestamp: 0 })
+
+      fire('execution_cached', {
+        prompt_id: 'job-1',
+        nodes: ['nodeA', 'nodeB'],
+        timestamp: 0
+      })
+
+      expect(store.activeJob?.nodes).toEqual({ nodeA: true, nodeB: true })
+    })
+
+    it('is a no-op when no active job exists', () => {
+      fire('execution_cached', {
+        prompt_id: 'job-1',
+        nodes: ['nodeA'],
+        timestamp: 0
+      })
+
+      expect(store.activeJob).toBeUndefined()
+    })
+  })
+
+  describe('execution_interrupted', () => {
+    it('clears active job state on interrupt', () => {
+      fire('execution_start', { prompt_id: 'job-1', timestamp: 0 })
+      expect(store.activeJobId).toBe('job-1')
+
+      fire('execution_interrupted', {
+        prompt_id: 'job-1',
+        node_id: 'n1',
+        node_type: 't',
+        executed: [],
+        timestamp: 0
+      })
+
+      expect(store.activeJobId).toBeNull()
+      expect(store.queuedJobs['job-1']).toBeUndefined()
+    })
+  })
+
+  it.for([
+    {
+      event: 'execution_success',
+      detail: { prompt_id: 'job-1', timestamp: 0 }
+    },
+    {
+      event: 'execution_interrupted',
+      detail: {
+        prompt_id: 'job-1',
+        node_id: '1',
+        node_type: 't',
+        executed: [],
+        timestamp: 0
+      }
+    },
+    {
+      event: 'execution_error',
+      detail: {
+        prompt_id: 'job-1',
+        node_id: '1',
+        node_type: 't',
+        exception_type: 'RuntimeError',
+        exception_message: 'failed',
+        traceback: []
+      }
+    }
+  ])(
+    'notifies job reset listeners with the job after $event',
+    ({ event, detail }) => {
+      const onJobReset = vi.fn()
+      store.onJobReset(onJobReset)
+      const workflow = createQueuedWorkflow()
+      store.storeJob({
+        nodes: ['1'],
+        id: 'job-1',
+        promptOutput: { '1': createPromptNode('Node', 'Node') },
+        workflow,
+        mode: 'graph'
+      })
+      fire('execution_start', { prompt_id: 'job-1', timestamp: 0 })
+
+      fire(event, detail)
+
+      expect(onJobReset).toHaveBeenCalledExactlyOnceWith(
+        expect.objectContaining({ workflow })
+      )
+      expect(store.queuedJobs['job-1']).toBeUndefined()
+    }
+  )
+
+  describe('executed', () => {
+    it('marks the executed node as done on the active job', () => {
+      fire('execution_start', { prompt_id: 'job-1', timestamp: 0 })
+      fire('execution_cached', {
+        prompt_id: 'job-1',
+        nodes: ['n1'],
+        timestamp: 0
+      })
+
+      fire('executed', {
+        node: 'n1',
+        display_node: 'n1',
+        prompt_id: 'job-1',
+        output: {}
+      })
+
+      expect(store.activeJob?.nodes['n1']).toBe(true)
+    })
+
+    it('is a no-op when no active job exists', () => {
+      expect(() =>
+        fire('executed', {
+          node: 'n1',
+          display_node: 'n1',
+          prompt_id: 'orphan',
+          output: {}
+        })
+      ).not.toThrow()
+      expect(store.activeJob).toBeUndefined()
+    })
+  })
+
+  describe('execution_success', () => {
+    it('clears active job and progress state', () => {
+      fire('execution_start', { prompt_id: 'job-1', timestamp: 0 })
+
+      fire('execution_success', { prompt_id: 'job-1', timestamp: 0 })
+
+      expect(store.activeJobId).toBeNull()
+      expect(store.queuedJobs['job-1']).toBeUndefined()
+    })
+
+    it('does not track success for jobs this client did not queue', () => {
+      fire('execution_success', { prompt_id: 'foreign-job', timestamp: 0 })
+
+      expect(useTelemetry()?.trackExecutionSuccess).not.toHaveBeenCalled()
+      expect(useTelemetry()?.trackSharedWorkflowRun).not.toHaveBeenCalled()
+    })
+
+    it('tracks shared workflow run when the queued workflow has share attribution', () => {
+      const workflow = createQueuedWorkflow()
+      workflow.shareId = 'share-1'
+      store.storeJob({
+        nodes: ['a'],
+        id: 'job-1',
+        promptOutput: {
+          a: createPromptNode('Node A', 'NodeA')
+        },
+        workflow,
+        mode: 'graph'
+      })
+      fire('execution_start', { prompt_id: 'job-1', timestamp: 0 })
+
+      fire('execution_success', { prompt_id: 'job-1', timestamp: 0 })
+
+      expect(useTelemetry()?.trackExecutionSuccess).toHaveBeenCalledWith({
+        jobId: 'job-1'
+      })
+      expect(useTelemetry()?.trackSharedWorkflowRun).toHaveBeenCalledWith({
+        job_id: 'job-1',
+        share_id: 'share-1',
+        view_mode: 'graph',
+        is_app_mode: false
+      })
+    })
+
+    it('tracks shared workflow run from the success event job', () => {
+      const workflow = createQueuedWorkflow()
+      workflow.shareId = 'share-1'
+      store.storeJob({
+        nodes: ['a'],
+        id: 'job-1',
+        promptOutput: {
+          a: createPromptNode('Node A', 'NodeA')
+        },
+        workflow,
+        mode: 'graph'
+      })
+
+      fire('execution_success', { prompt_id: 'job-1', timestamp: 0 })
+
+      expect(useTelemetry()?.trackSharedWorkflowRun).toHaveBeenCalledWith({
+        job_id: 'job-1',
+        share_id: 'share-1',
+        view_mode: 'graph',
+        is_app_mode: false
+      })
+    })
+
+    it('attributes shared workflow run to queue-time mode, not completion-time mode', () => {
+      const workflow = createQueuedWorkflow()
+      workflow.shareId = 'share-1'
+      store.storeJob({
+        nodes: ['a'],
+        id: 'job-1',
+        promptOutput: {
+          a: createPromptNode('Node A', 'NodeA')
+        },
+        workflow,
+        mode: 'graph'
+      })
+
+      vi.spyOn(useAppMode().mode, 'value', 'get').mockReturnValue('app')
+      vi.spyOn(useAppMode().isAppMode, 'value', 'get').mockReturnValue(true)
+      fire('execution_success', { prompt_id: 'job-1', timestamp: 0 })
+
+      expect(useTelemetry()?.trackSharedWorkflowRun).toHaveBeenCalledWith({
+        job_id: 'job-1',
+        share_id: 'share-1',
+        view_mode: 'graph',
+        is_app_mode: false
+      })
+    })
+
+    it('attributes shared workflow run to the passed mode, not the workflow current mode', () => {
+      const workflow = createQueuedWorkflow()
+      workflow.shareId = 'share-1'
+      workflow.activeMode = 'graph'
+      store.storeJob({
+        nodes: ['a'],
+        id: 'job-1',
+        promptOutput: {
+          a: createPromptNode('Node A', 'NodeA')
+        },
+        workflow,
+        mode: 'app'
+      })
+
+      fire('execution_success', { prompt_id: 'job-1', timestamp: 0 })
+
+      expect(useTelemetry()?.trackSharedWorkflowRun).toHaveBeenCalledWith({
+        job_id: 'job-1',
+        share_id: 'share-1',
+        view_mode: 'app',
+        is_app_mode: true
+      })
+    })
+  })
+
+  describe('executing', () => {
+    it('clears _executingNodeProgress and activeJobId when detail is null', () => {
+      fire('execution_start', { prompt_id: 'job-1', timestamp: 0 })
+      store._executingNodeProgress = {
+        value: 1,
+        max: 2,
+        prompt_id: 'job-1',
+        node: '1'
+      }
+
+      fire('executing', null)
+
+      expect(store._executingNodeProgress).toBeNull()
+      expect(store.activeJobId).toBeNull()
+    })
+
+    it('keeps the active job when a numeric node id is executing', () => {
+      fire('execution_start', { prompt_id: 'job-1', timestamp: 0 })
+
+      fire('executing', 123)
+
+      expect(store.activeJobId).toBe('job-1')
+      expect(store.queuedJobs['job-1']).toBeDefined()
+    })
+
+    it('discards a progress update still queued when the next node starts', () => {
+      fire('progress', { value: 3, max: 10, prompt_id: 'job-1', node: 'n1' })
+
+      fire('executing', 'n2')
+      vi.advanceTimersToNextFrame()
+
+      expect(store._executingNodeProgress).toBeNull()
+    })
+  })
+
+  describe('progress', () => {
+    it('sets _executingNodeProgress from the event payload (RAF-batched)', () => {
+      const payload = { value: 3, max: 10, prompt_id: 'job-1', node: 'n1' }
+
+      fire('progress', payload)
+      // RAF-batched: not applied synchronously
+      expect(store._executingNodeProgress).toBeNull()
+
+      vi.advanceTimersToNextFrame()
+
+      expect(store._executingNodeProgress).toEqual(payload)
+    })
+  })
+
+  describe('status', () => {
+    it('reads clientId from api once and stops listening', async () => {
+      const apiModule = await import('@/scripts/api')
+      const removeSpy = vi.mocked(apiModule.api.removeEventListener)
+
+      fire('status', { exec_info: { queue_remaining: 0 } })
+
+      expect(store.clientId).toBe('test-client')
+      expect(removeSpy).toHaveBeenCalledWith('status', expect.any(Function))
+    })
+  })
+
+  describe('execution_error', () => {
+    it('routes a service-level error (no node_id) to the prompt error store', () => {
+      const errorStore = useExecutionErrorStore()
+      storeVisibleJob('job-1')
+
+      fire('execution_error', {
+        prompt_id: 'job-1',
+        node_id: null,
+        exception_type: 'StagnationError',
+        exception_message: 'Job has stagnated',
+        traceback: ['line 1', 'line 2']
+      })
+
+      expect(errorStore.lastPromptError).toMatchObject({
+        type: 'StagnationError',
+        message: 'StagnationError: Job has stagnated',
+        details: 'line 1\nline 2'
+      })
+    })
+
+    it('routes a runtime error (with node_id) to lastExecutionError', () => {
+      const errorStore = useExecutionErrorStore()
+      storeVisibleJob('job-1')
+
+      fire('execution_error', {
+        prompt_id: 'job-1',
+        node_id: 'n1',
+        node_type: 'KSampler',
+        exception_type: 'RuntimeError',
+        exception_message: 'CUDA OOM',
+        traceback: []
+      })
+
+      expect(errorStore.lastExecutionError).toMatchObject({
+        prompt_id: 'job-1',
+        node_id: 'n1',
+        exception_message: 'CUDA OOM'
+      })
+    })
+
+    it('keeps a subscription precondition (no node_id) out of the error panel', () => {
+      const errorStore = useExecutionErrorStore()
+
+      fire('execution_error', {
+        prompt_id: 'job-1',
+        node_id: null,
+        exception_type: 'InactiveSubscriptionError',
+        exception_message:
+          'User has no active subscription. Please subscribe to a plan to continue.',
+        traceback: []
+      })
+
+      expect(errorStore.lastExecutionError).toBeNull()
+      expect(errorStore.lastPromptError).toBeNull()
+      expect(errorStore.lastNodeErrors).toBeNull()
+    })
+
+    it('keeps a sign-in precondition out of the error panel', () => {
+      const errorStore = useExecutionErrorStore()
+
+      fire('execution_error', {
+        prompt_id: 'job-1',
+        node_id: 'n1',
+        node_type: 'ApiNode',
+        exception_type: 'RuntimeError',
+        exception_message: 'Unauthorized: Please login first to use this node.',
+        traceback: []
+      })
+
+      expect(errorStore.lastExecutionError).toBeNull()
+      expect(errorStore.lastPromptError).toBeNull()
+    })
+
+    it('keeps a runtime credit precondition at a node out of the error panel', () => {
+      const errorStore = useExecutionErrorStore()
+
+      fire('execution_error', {
+        prompt_id: 'job-1',
+        node_id: 'n1',
+        node_type: 'PartnerApiNode',
+        exception_type: 'InsufficientFundsError',
+        exception_message:
+          'Payment Required: Please add credits to your account to use this node.',
+        traceback: []
+      })
+
+      expect(errorStore.lastExecutionError).toBeNull()
+      expect(errorStore.lastPromptError).toBeNull()
+    })
+
+    it('still routes an ordinary node runtime error to the error panel', () => {
+      const errorStore = useExecutionErrorStore()
+      storeVisibleJob('job-1')
+
+      fire('execution_error', {
+        prompt_id: 'job-1',
+        node_id: 'n1',
+        node_type: 'KSampler',
+        exception_type: 'RuntimeError',
+        exception_message: 'Something unrelated broke',
+        traceback: []
+      })
+
+      expect(errorStore.lastExecutionError).not.toBeNull()
+    })
+  })
+
+  describe('notification', () => {
+    it('marks a job as initializing when text indicates waiting for a machine', () => {
+      fire('notification', {
+        id: 'job-9',
+        value: 'Waiting for a machine to become available'
+      })
+
+      expect(store.initializingJobIds.has('job-9')).toBe(true)
+    })
+
+    it('ignores notifications without an id', () => {
+      fire('notification', {
+        id: '',
+        value: 'Waiting for a machine'
+      })
+
+      expect(store.initializingJobIds.size).toBe(0)
+    })
+
+    it('ignores notifications without the waiting-for-machine sentinel', () => {
+      fire('notification', { id: 'job-9', value: 'Hello' })
+
+      expect(store.initializingJobIds.has('job-9')).toBe(false)
+    })
+  })
+
+  describe('unbindExecutionEvents', () => {
+    it('removes every listener registered by bindExecutionEvents', async () => {
+      const apiModule = await import('@/scripts/api')
+      const removeSpy = vi.mocked(apiModule.api.removeEventListener)
+      const events = [
+        'notification',
+        'execution_start',
+        'execution_cached',
+        'execution_interrupted',
+        'execution_success',
+        'executed',
+        'executing',
+        'progress',
+        'progress_state',
+        'execution_error'
+      ]
+
+      store.unbindExecutionEvents()
+
+      for (const event of events) {
+        expect(removeSpy).toHaveBeenCalledWith(event, expect.any(Function))
+      }
+    })
+  })
+})
+
+describe('useExecutionStore - storeJob and workflow path tracking', () => {
+  let store: ReturnType<typeof useExecutionStore>
+
+  beforeEach(() => {
+    apiEventHandlers.clear()
+    store = useExecutionStore()
+  })
+
+  it('storeJob populates queuedJobs and tracks the workflow path', () => {
+    const workflow = {
+      activeState: { id: 'wf-1' },
+      initialState: { id: 'wf-1' },
+      path: '/workflows/foo.json'
+    } as unknown as Parameters<typeof store.storeJob>[0]['workflow']
+
+    store.storeJob({
+      nodes: ['a', 'b'],
+      id: 'job-1',
+      promptOutput: {
+        a: createPromptNode('Node A', 'NodeA'),
+        b: createPromptNode('Node B', 'NodeB')
+      },
+      workflow,
+      mode: 'graph'
+    })
+
+    expect(store.queuedJobs['job-1']?.nodes).toEqual({ a: false, b: false })
+    expect(store.queuedJobs['job-1']?.nodeLookup).toEqual({
+      a: { title: 'Node A', type: 'NodeA' },
+      b: { title: 'Node B', type: 'NodeB' }
+    })
+    expect(store.queuedJobs['job-1']?.workflow).toStrictEqual(workflow)
+    expect(store.queuedJobs['job-1']?.shareId).toBeUndefined()
+    expect(store.jobIdToWorkflowId.get('job-1')).toBe('wf-1')
+    expect(store.jobIdToSessionWorkflowPath.get('job-1')).toBe(
+      '/workflows/foo.json'
+    )
+  })
+
+  it('registerJobWorkflowIdMapping ignores empty inputs', () => {
+    store.registerJobWorkflowIdMapping('job-1', 'wf-1')
+    store.registerJobWorkflowIdMapping('', 'wf-2')
+    store.registerJobWorkflowIdMapping('job-2', '')
+
+    expect(store.jobIdToWorkflowId.get('job-1')).toBe('wf-1')
+    expect(store.jobIdToWorkflowId.size).toBe(1)
+  })
+
+  it('ensureSessionWorkflowPath is idempotent and updates on change', () => {
+    store.ensureSessionWorkflowPath('job-1', '/a.json')
+    store.ensureSessionWorkflowPath('job-1', '/a.json')
+    store.ensureSessionWorkflowPath('job-1', '/b.json')
+
+    expect(store.jobIdToSessionWorkflowPath.get('job-1')).toBe('/b.json')
+  })
+})

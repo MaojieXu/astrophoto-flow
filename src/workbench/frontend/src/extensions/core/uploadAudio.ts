@@ -1,0 +1,517 @@
+import { MediaRecorder as ExtendableMediaRecorder } from 'extendable-media-recorder'
+
+import { useNodeDragAndDrop } from '@/composables/node/useNodeDragAndDrop'
+import { useNodeFileInput } from '@/composables/node/useNodeFileInput'
+import { useNodePaste } from '@/composables/node/useNodePaste'
+import { t } from '@/i18n'
+import type { LGraphNode } from '@/lib/litegraph/src/litegraph'
+import { resolveNodeRootGraphId } from '@/lib/litegraph/src/litegraph'
+import type {
+  IBaseWidget,
+  IStringWidget
+} from '@/lib/litegraph/src/types/widgets'
+import { reportError } from '@/platform/telemetry/reportError'
+import { useToast } from '@/components/ui/toast/toastStore'
+import {
+  getResourceURL,
+  splitFilePath
+} from '@/renderer/extensions/vueNodes/widgets/utils/audioUtils'
+import type { NodeExecutionOutput } from '@/platform/remote/comfyui/execution/types'
+import type { ComfyNodeDef, InputSpec } from '@/schemas/nodeDefSchema'
+import type { DOMWidget } from '@/scripts/domWidget'
+import { useAudioService } from '@/services/audioService'
+import type { NodeLocatorId } from '@/types'
+import { widgetId } from '@/types/widgetId'
+import { getErrorMessage } from '@/utils/errorUtil'
+import { getNodeByLocatorId } from '@/utils/graphTraversalUtil'
+
+import { api } from '../../scripts/api'
+import { app } from '../../scripts/app'
+import { useWidgetValueStore } from '@/stores/widgetValueStore'
+
+function updateUIWidget(
+  audioUIWidget: DOMWidget<HTMLAudioElement, string>,
+  url: string = ''
+) {
+  audioUIWidget.element.src = url
+  audioUIWidget.value = url
+  audioUIWidget.callback?.(url)
+  if (url) audioUIWidget.element.classList.remove('empty-audio-widget')
+  else audioUIWidget.element.classList.add('empty-audio-widget')
+}
+
+function appendWidgetValue(widget: IStringWidget, path: string) {
+  const values = widget.options.values
+  if (values && !values.includes(path)) values.push(path)
+}
+
+async function uploadFile(
+  node: LGraphNode,
+  audioWidget: IStringWidget,
+  audioUIWidget: DOMWidget<HTMLAudioElement, string>,
+  file: File,
+  updateNode: boolean,
+  pasted: boolean = false
+): Promise<boolean> {
+  try {
+    // Wrap file in formdata so it includes filename
+    const body = new FormData()
+    body.append('image', file)
+    if (pasted) body.append('subfolder', 'pasted')
+    const resp = await api.fetchApi('/upload/image', {
+      method: 'POST',
+      body
+    })
+
+    if (resp.status === 200) {
+      const data: { name: string; subfolder?: string } = await resp.json()
+      // Add the file to the dropdown list and update the widget value
+      const path = data.subfolder ? `${data.subfolder}/${data.name}` : data.name
+
+      appendWidgetValue(audioWidget, path)
+
+      if (updateNode) {
+        const oldValue = audioWidget.value
+        updateUIWidget(
+          audioUIWidget,
+          api.apiURL(getResourceURL(...splitFilePath(path)))
+        )
+
+        audioWidget.value = path
+        // Manually trigger the callback to update VueNodes
+        audioWidget.callback?.(path)
+        node.onWidgetChanged?.(audioWidget.name, path, oldValue, audioWidget)
+      }
+      return true
+    } else {
+      useToast().warning(
+        t('g.uploadFailed', { reason: `${resp.status} - ${resp.statusText}` })
+      )
+      return false
+    }
+  } catch (error) {
+    useToast().warning(
+      t('g.uploadFailed', {
+        reason: getErrorMessage(error) ?? t('g.unknownError')
+      })
+    )
+    return false
+  }
+}
+
+// AudioWidget MUST be registered first, as AUDIOUPLOAD depends on AUDIO_UI to be
+// present.
+app.registerExtension({
+  name: 'Comfy.AudioWidget',
+  async beforeRegisterNodeDef(
+    nodeType: typeof LGraphNode,
+    nodeData: ComfyNodeDef
+  ) {
+    const comfyClass = nodeType.prototype.comfyClass
+    if (
+      comfyClass &&
+      [
+        'LoadAudio',
+        'SaveAudio',
+        'PreviewAudio',
+        'SaveAudioMP3',
+        'SaveAudioOpus',
+        'SaveAudioAdvanced'
+      ].includes(comfyClass)
+    ) {
+      const input = (nodeData.input ??= {})
+      const required = (input.required ??= {})
+      required.audioUI = ['AUDIO_UI', {}]
+    }
+  },
+  getCustomWidgets() {
+    return {
+      AUDIO_UI(node: LGraphNode, inputName: string) {
+        const audio = document.createElement('audio')
+        audio.controls = true
+        audio.classList.add('comfy-audio')
+        audio.setAttribute('name', 'media')
+
+        const audioUIWidget: DOMWidget<HTMLAudioElement, string> =
+          node.addDOMWidget(inputName, /* name=*/ 'audioUI', audio)
+        audioUIWidget.serialize = false
+        audioUIWidget.options.serialize = false
+        const { nodeData } = node.constructor
+        if (nodeData == null) throw new TypeError('nodeData is null')
+
+        const isOutputNode = nodeData.output_node
+        if (isOutputNode) {
+          // Hide the audio widget when there is no audio initially.
+          audioUIWidget.element.classList.add('empty-audio-widget')
+          // Populate the audio widget UI on node execution.
+          const onExecuted = node.onExecuted
+          node.onExecuted = function (output: NodeExecutionOutput) {
+            onExecuted?.call(this, output)
+            const audios = output.audio
+            if (!audios?.length) return
+            const audio = audios[0]
+            const resourceUrl = getResourceURL(
+              audio.subfolder ?? '',
+              audio.filename ?? '',
+              audio.type
+            )
+            updateUIWidget(audioUIWidget, api.apiURL(resourceUrl))
+          }
+        }
+
+        audioUIWidget.options.getValue = () => {
+          const value = useWidgetValueStore().getWidget(
+            widgetId(
+              resolveNodeRootGraphId(node, app.rootGraph.id),
+              node.id,
+              inputName
+            )
+          )?.value
+          return typeof value === 'string' ? value : ''
+        }
+        audioUIWidget.options.setValue = (v) => {
+          const graphId = resolveNodeRootGraphId(node, app.rootGraph.id)
+          const widgetState = useWidgetValueStore().getWidget(
+            widgetId(graphId, node.id, inputName)
+          )
+          if (widgetState) widgetState.value = v
+        }
+
+        return { widget: audioUIWidget }
+      }
+    }
+  },
+  onNodeOutputsUpdated(
+    nodeOutputs: Record<NodeLocatorId, NodeExecutionOutput>
+  ) {
+    for (const [nodeLocatorId, output] of Object.entries(nodeOutputs)) {
+      if (!output.audio?.length) continue
+
+      const node = getNodeByLocatorId(app.rootGraph, nodeLocatorId)
+      if (!node) continue
+
+      const audioUIWidget = node.widgets?.find(
+        (w) => w.name === 'audioUI'
+      ) as unknown as DOMWidget<HTMLAudioElement, string>
+      const audio = output.audio[0]
+      const resourceUrl = getResourceURL(
+        audio.subfolder ?? '',
+        audio.filename ?? '',
+        audio.type
+      )
+      updateUIWidget(audioUIWidget, api.apiURL(resourceUrl))
+    }
+  }
+})
+
+app.registerExtension({
+  name: 'Comfy.UploadAudio',
+  async beforeRegisterNodeDef(
+    _nodeType: typeof LGraphNode,
+    nodeData: ComfyNodeDef
+  ) {
+    const required: Partial<Record<string, InputSpec>> | undefined =
+      nodeData.input?.required
+    if (required?.audio?.[1]?.audio_upload === true) {
+      required.upload = ['AUDIOUPLOAD', {}]
+    }
+  },
+  getCustomWidgets() {
+    return {
+      AUDIOUPLOAD(node, inputName: string) {
+        // The widget that allows user to select file.
+        const audioWidget = node.widgets?.find(
+          (w) => w.name === 'audio'
+        ) as IStringWidget
+        const audioUIWidget = node.widgets?.find(
+          (w) => w.name === 'audioUI'
+        ) as unknown as DOMWidget<HTMLAudioElement, string>
+
+        const onAudioWidgetUpdate = () => {
+          const value = audioWidget.value
+          const values = audioWidget.options.values
+          const isEmptySentinel =
+            value === 'none' && values?.length === 1 && values[0] === value
+          updateUIWidget(
+            audioUIWidget,
+            value && !isEmptySentinel
+              ? api.apiURL(getResourceURL(...splitFilePath(value)))
+              : ''
+          )
+        }
+        // Initially load default audio file to audioUIWidget.
+        onAudioWidgetUpdate()
+
+        audioWidget.callback = onAudioWidgetUpdate
+
+        // Load saved audio file widget values if restoring from workflow
+        const onGraphConfigured = node.onGraphConfigured
+        node.onGraphConfigured = function () {
+          onGraphConfigured?.call(this)
+          onAudioWidgetUpdate()
+        }
+
+        const handleUpload = async (files: File[]) => {
+          if (!files.length) return files
+
+          if (node.isUploading) {
+            useToast().warning(t('g.uploadAlreadyInProgress'))
+            return []
+          }
+
+          node.isUploading = true
+          const previousValue = audioWidget.value
+          audioWidget.value = files[0].name
+          try {
+            const success = await uploadFile(
+              node,
+              audioWidget,
+              audioUIWidget,
+              files[0],
+              true
+            )
+            if (!success) {
+              audioWidget.value = previousValue
+            }
+          } finally {
+            node.isUploading = false
+            node.graph?.setDirtyCanvas(true)
+          }
+          return files
+        }
+
+        const isAudioFile = (file: File) => file.type.startsWith('audio/')
+
+        const { openFileSelection } = useNodeFileInput(node, {
+          accept: 'audio/*',
+          onSelect: handleUpload
+        })
+
+        // The widget to pop up the upload dialog.
+        const uploadWidget = node.addWidget(
+          'button',
+          inputName,
+          '',
+          openFileSelection,
+          {
+            serialize: false,
+            surfaces: { canvas: 'shown', vueNode: 'never', panel: 'never' }
+          }
+        )
+        uploadWidget.label = t('g.choose_file_to_upload')
+
+        useNodeDragAndDrop(node, {
+          fileFilter: isAudioFile,
+          onDrop: handleUpload
+        })
+
+        useNodePaste(node, {
+          fileFilter: isAudioFile,
+          onPaste: handleUpload
+        })
+
+        node.previewMediaType = 'audio'
+
+        return { widget: uploadWidget }
+      }
+    }
+  }
+})
+
+app.registerExtension({
+  name: 'Comfy.RecordAudio',
+
+  getCustomWidgets() {
+    return {
+      AUDIO_RECORD(node, inputName: string) {
+        const audio = document.createElement('audio')
+        audio.controls = true
+        audio.classList.add('comfy-audio')
+        audio.setAttribute('name', 'media')
+        const audioUIWidget: DOMWidget<HTMLAudioElement, string> =
+          node.addDOMWidget(inputName, /* name=*/ 'audioUI', audio)
+
+        let mediaRecorder: MediaRecorder | null = null
+        let isRecording = false
+        let audioChunks: Blob[] = []
+        let currentStream: MediaStream | null = null
+        let recordWidget: IBaseWidget | null = null
+
+        let stopPromise: Promise<void> | null = null
+        let stopResolve: (() => void) | null = null
+
+        const handleRecordingStartFailure = (error: unknown) => {
+          reportError(error, {
+            surface: 'assets',
+            errorType: 'failure_starting_audio_recorder',
+            tags: {
+              failure_kind: 'caught_unexpected',
+              feature_area: 'assets',
+              operation: 'execute',
+              outcome: 'recovered'
+            },
+            level: 'error'
+          })
+          useToast().warning(t('g.recordingFailedToStart'))
+
+          if (mediaRecorder) {
+            try {
+              mediaRecorder.stop()
+            } catch {
+              // A recorder that never started throws on stop; recovery continues.
+            }
+          }
+          mediaRecorder = null
+          useAudioService().stopAllTracks(currentStream)
+          currentStream = null
+          isRecording = false
+          if (recordWidget) {
+            recordWidget.label = t('g.startRecording')
+          }
+        }
+
+        audioUIWidget.serializeValue = async () => {
+          if (isRecording && mediaRecorder) {
+            stopPromise = new Promise((resolve) => {
+              stopResolve = resolve
+            })
+
+            mediaRecorder.stop()
+
+            await stopPromise
+          }
+
+          const audioSrc = audioUIWidget.element.src
+
+          if (!audioSrc) {
+            useToast().warning(t('g.noAudioRecorded'))
+            return ''
+          }
+
+          const blob = await fetch(audioSrc).then((r) => r.blob())
+
+          return await useAudioService().convertBlobToFileAndSubmit(blob)
+        }
+
+        recordWidget = node.addWidget(
+          'button',
+          inputName,
+          '',
+          async () => {
+            if (isRecording) {
+              mediaRecorder?.stop()
+              return
+            }
+
+            try {
+              currentStream = await navigator.mediaDevices.getUserMedia({
+                audio: true
+              })
+            } catch (err) {
+              if (
+                err instanceof DOMException &&
+                err.name === 'NotAllowedError'
+              ) {
+                console.error('Error accessing microphone:', err)
+                useToast().warning(t('g.micPermissionDenied'))
+                useAudioService().stopAllTracks(currentStream)
+                currentStream = null
+              } else {
+                handleRecordingStartFailure(err)
+              }
+              return
+            }
+
+            try {
+              mediaRecorder = new ExtendableMediaRecorder(currentStream, {
+                mimeType: 'audio/wav'
+              }) as unknown as MediaRecorder
+
+              audioChunks = []
+
+              mediaRecorder.ondataavailable = (event) => {
+                audioChunks.push(event.data)
+              }
+
+              mediaRecorder.onstop = async () => {
+                const audioBlob = new Blob(audioChunks, { type: 'audio/wav' })
+
+                useAudioService().stopAllTracks(currentStream)
+
+                if (
+                  audioUIWidget.element.src &&
+                  audioUIWidget.element.src.startsWith('blob:')
+                ) {
+                  URL.revokeObjectURL(audioUIWidget.element.src)
+                }
+
+                updateUIWidget(audioUIWidget, URL.createObjectURL(audioBlob))
+
+                isRecording = false
+
+                if (recordWidget) {
+                  recordWidget.label = t('g.startRecording')
+                }
+
+                if (stopResolve) {
+                  stopResolve()
+                  stopResolve = null
+                  stopPromise = null
+                }
+              }
+
+              mediaRecorder.onerror = (event) => {
+                console.error('MediaRecorder error:', event)
+                useAudioService().stopAllTracks(currentStream)
+                isRecording = false
+
+                if (recordWidget) {
+                  recordWidget.label = t('g.startRecording')
+                }
+
+                if (stopResolve) {
+                  stopResolve()
+                  stopResolve = null
+                  stopPromise = null
+                }
+              }
+
+              mediaRecorder.start()
+              isRecording = true
+              if (recordWidget) {
+                recordWidget.label = t('g.stopRecording')
+              }
+            } catch (err) {
+              handleRecordingStartFailure(err)
+            }
+          },
+          { serialize: false }
+        )
+
+        recordWidget.label = t('g.startRecording')
+        // Override the type for Vue rendering while keeping 'button' for LiteGraph
+        recordWidget.type = 'audiorecord'
+
+        const originalOnRemoved = node.onRemoved
+        node.onRemoved = function () {
+          if (isRecording && mediaRecorder) {
+            mediaRecorder.stop()
+          }
+          useAudioService().stopAllTracks(currentStream)
+          if (audioUIWidget.element.src.startsWith('blob:')) {
+            URL.revokeObjectURL(audioUIWidget.element.src)
+          }
+          originalOnRemoved?.call(this)
+        }
+
+        return { widget: recordWidget }
+      }
+    }
+  },
+
+  async nodeCreated(node: LGraphNode) {
+    if (node.constructor.comfyClass !== 'RecordAudio') return
+
+    await useAudioService().registerWavEncoder()
+  }
+})

@@ -1,0 +1,52 @@
+AstroPhotoFlow
+Copyright (C) 2026 AstroPhotoFlow contributors
+
+This program is free software: you can redistribute it and/or modify it under
+the terms of the GNU General Public License as published by the Free Software
+Foundation, version 3. This program is distributed in the hope that it will be
+useful, but WITHOUT ANY WARRANTY; without even the implied warranty of
+MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the LICENSE file for
+the full text.
+
+The workbench, the MCP server and the bundled engine shell are released under
+GPL-3.0-only as part of one distribution. The MCP server talks to the workbench
+over HTTP and contains no engine code, so it could carry a different license;
+this project keeps one license across the repository to avoid per-directory
+license arbitration.
+
+Third-party works
+-----------------
+
+ComfyUI
+  0.42.0, commit 1a82e6d01f395b43275c77acd289af1eb7090bb9
+  Copyright (C) ComfyUI contributors
+  GPL-3.0-only
+  https://github.com/comfyanonymous/ComfyUI
+
+ComfyUI_frontend
+  1.57.1, commit c875ee420aa027a359b2953361eb3b356b7bef00
+  Copyright (C) Comfy Org
+  GPL-3.0-only
+  https://github.com/Comfy-Org/ComfyUI_frontend
+
+ComfyUI-Manager and comfy-cli were evaluated for reuse and are not
+redistributed; their licenses remain untouched by this project.
+
+Modifications
+-------------
+
+This distribution contains modified copies of the works above. Section 5(a) of
+GPL-3.0 requires a modified source file to carry prominent notices stating that
+the file was changed and the date. Modifications are recorded as follows:
+
+- A modified upstream file carries a `Modified: <date> — <what changed>` line in
+  its header, or, where the file format makes a header impossible, an entry in
+  `docs/licensing.md`.
+- `docs/licensing.md` is the authoritative list of the files this project
+  changed or added on top of an upstream release, kept with the pin it applies
+  to.
+- Every release tag names one commit whose tree contains the exact sources the
+  published artifacts were built from.
+
+Third-party dependencies keep their own licenses; the LICENSE file here does not
+replace them.

@@ -1,0 +1,172 @@
+import userEvent from '@testing-library/user-event'
+import { render, screen, waitFor } from '@testing-library/vue'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { createI18n } from 'vue-i18n'
+
+import { useToast } from '@/components/ui/toast/toastStore'
+import { useAuthActions } from '@/composables/auth/useAuthActions'
+import enMessages from '@/locales/en/main.json' with { type: 'json' }
+import { useAuthStore } from '@/stores/authStore'
+
+import SignInForm from './SignInForm.vue'
+vi.mock(import('firebase/auth'))
+
+// Mock the auth composables and stores
+vi.mock(import('@/composables/auth/useAuthActions'))
+
+const forgotPasswordText = enMessages.auth.login.forgotPassword
+const loginButtonText = enMessages.auth.login.loginButton
+
+describe('SignInForm', () => {
+  beforeEach(() => {
+    useAuthStore().loading = false
+  })
+
+  function renderComponent(props: Record<string, unknown> = {}) {
+    const i18n = createI18n({
+      legacy: false,
+      locale: 'en',
+      messages: { en: enMessages }
+    })
+    const user = userEvent.setup()
+    const result = render(SignInForm, {
+      global: { plugins: [i18n] },
+      props
+    })
+    return { ...result, user }
+  }
+
+  function getEmailInput() {
+    return screen.getByPlaceholderText(enMessages.auth.login.emailPlaceholder)
+  }
+
+  function getPasswordInput() {
+    return screen.getByPlaceholderText(
+      enMessages.auth.login.passwordPlaceholder
+    )
+  }
+
+  describe('Forgot Password Link', () => {
+    it('flags the empty email field and focuses it instead of sending a reset', async () => {
+      const { user } = renderComponent()
+
+      await user.click(screen.getByText(forgotPasswordText))
+
+      await waitFor(() =>
+        expect(getEmailInput()).toHaveAttribute('aria-invalid', 'true')
+      )
+      expect(getEmailInput()).toHaveFocus()
+      expect(useToast().toasts).toEqual([])
+      expect(useAuthActions().sendPasswordReset).not.toHaveBeenCalled()
+    })
+  })
+
+  describe('Form Submission', () => {
+    it('emits submit event when form is submitted with valid data', async () => {
+      const onSubmit = vi.fn()
+      const { user } = renderComponent({ onSubmit })
+
+      await user.type(getEmailInput(), 'test@example.com')
+      await user.type(getPasswordInput(), 'password123')
+      const submit = screen.getByRole('button', { name: loginButtonText })
+      await waitFor(() => expect(submit).toBeEnabled())
+      await user.click(submit)
+
+      await waitFor(() => {
+        expect(onSubmit).toHaveBeenCalledWith({
+          email: 'test@example.com',
+          password: 'password123'
+        })
+      })
+    })
+
+    it('does not emit submit event when form data is invalid', async () => {
+      const onSubmit = vi.fn()
+      const { user } = renderComponent({ onSubmit })
+
+      await user.type(getEmailInput(), 'invalid-email')
+      await user.type(getPasswordInput(), 'password123')
+      await user.click(screen.getByRole('button', { name: loginButtonText }))
+
+      expect(onSubmit).not.toHaveBeenCalled()
+    })
+  })
+
+  describe('Loading State', () => {
+    it('shows spinner when loading', () => {
+      useAuthStore().loading = true
+      renderComponent()
+
+      expect(
+        screen.getByRole('progressbar', { name: 'Loading' })
+      ).toBeInTheDocument()
+      expect(
+        screen.queryByRole('button', { name: loginButtonText })
+      ).not.toBeInTheDocument()
+    })
+
+    it('shows button when not loading', () => {
+      renderComponent()
+
+      expect(screen.queryByRole('progressbar')).not.toBeInTheDocument()
+      expect(
+        screen.getByRole('button', { name: loginButtonText })
+      ).toBeInTheDocument()
+    })
+  })
+
+  describe('Component Structure', () => {
+    it('renders email input with correct attributes', () => {
+      renderComponent()
+
+      const emailInput = getEmailInput()
+      expect(emailInput).toHaveAttribute('id', 'comfy-org-sign-in-email')
+      expect(emailInput).toHaveAttribute('autocomplete', 'email')
+      expect(emailInput).toHaveAttribute('name', 'email')
+      expect(emailInput).toHaveAttribute('type', 'text')
+    })
+
+    it('renders password input with correct attributes', () => {
+      renderComponent()
+
+      const passwordInput = getPasswordInput()
+      expect(passwordInput).toHaveAttribute('id', 'comfy-org-sign-in-password')
+      expect(passwordInput).toHaveAttribute('name', 'password')
+      expect(passwordInput).toHaveAttribute('type', 'password')
+    })
+
+    it('toggles password visibility', async () => {
+      const { user } = renderComponent()
+
+      await user.click(
+        screen.getByRole('button', { name: enMessages.auth.showPassword })
+      )
+
+      expect(getPasswordInput()).toHaveAttribute('type', 'text')
+      expect(
+        screen.getByRole('button', { name: enMessages.auth.hidePassword })
+      ).toHaveAttribute('aria-pressed', 'true')
+    })
+  })
+
+  describe('Forgot Password with valid email', () => {
+    it('sends a password reset from the keyboard when email is valid', async () => {
+      const { user } = renderComponent()
+
+      await user.type(getEmailInput(), 'test@example.com')
+      await user.tab()
+
+      expect(
+        screen.getByRole('button', { name: forgotPasswordText })
+      ).toHaveFocus()
+      await user.keyboard('{Enter}')
+
+      await waitFor(() =>
+        expect(useAuthActions().sendPasswordReset).toHaveBeenCalledWith(
+          'test@example.com'
+        )
+      )
+      expect(useToast().toasts).toEqual([])
+    })
+  })
+})

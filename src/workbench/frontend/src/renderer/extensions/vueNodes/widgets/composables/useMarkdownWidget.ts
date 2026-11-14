@@ -1,0 +1,135 @@
+import { Editor as TiptapEditor } from '@tiptap/core'
+import {
+  Table as TiptapTable,
+  TableCell as TiptapTableCell,
+  TableHeader as TiptapTableHeader,
+  TableRow as TiptapTableRow
+} from '@tiptap/extension-table'
+import TiptapStarterKit from '@tiptap/starter-kit'
+import { Markdown as TiptapMarkdown } from 'tiptap-markdown'
+
+import { useChainCallback } from '@/composables/functional/useChainCallback'
+import type { LGraphNode } from '@/lib/litegraph/src/litegraph'
+import { resolveNodeRootGraphId } from '@/lib/litegraph/src/utils/widget'
+import { forwardMiddleButtonToCanvas } from '@/renderer/extensions/vueNodes/widgets/utils/forwardMiddleButtonToCanvas'
+import type { InputSpec } from '@/schemas/nodeDef/nodeDefSchemaV2'
+import { useApp } from '@/scripts/appInstance'
+import type { ComfyWidgetConstructorV2 } from '@/types/widgetConstructor'
+import { useWidgetValueStore } from '@/stores/widgetValueStore'
+import { widgetId } from '@/types/widgetId'
+
+// TODO: This widget manually syncs with widgetValueStore via getValue/setValue.
+// Consolidate with useStringWidget into shared helpers (domWidgetHelpers.ts).
+function addMarkdownWidget(
+  node: LGraphNode,
+  name: string,
+  opts: { defaultVal: string }
+) {
+  TiptapMarkdown.configure({
+    html: false,
+    breaks: true,
+    transformPastedText: true
+  })
+  const editor = new TiptapEditor({
+    extensions: [
+      TiptapStarterKit,
+      TiptapMarkdown,
+      TiptapTable,
+      TiptapTableCell,
+      TiptapTableHeader,
+      TiptapTableRow
+    ],
+    content: opts.defaultVal,
+    editable: false
+  })
+
+  const widgetStore = useWidgetValueStore()
+
+  const inputEl = editor.options.element as HTMLElement
+  inputEl.classList.add('comfy-markdown')
+  const textarea = document.createElement('textarea')
+  inputEl.append(textarea)
+
+  const widget = node.addDOMWidget(name, 'MARKDOWN', inputEl, {
+    getValue(): string {
+      const graphId = resolveNodeRootGraphId(node, useApp().rootGraph.id)
+      const storedValue = widgetStore.getWidget(
+        widgetId(graphId, node.id, name)
+      )?.value
+      return typeof storedValue === 'string' ? storedValue : textarea.value
+    },
+    setValue(v: string) {
+      textarea.value = v
+      editor.commands.setContent(v)
+      const graphId = resolveNodeRootGraphId(node, useApp().rootGraph.id)
+      const widgetState = widgetStore.getWidget(
+        widgetId(graphId, node.id, name)
+      )
+      if (widgetState) widgetState.value = v
+    }
+  })
+  widget.element = inputEl
+  widget.options.minNodeSize = [400, 200]
+
+  const controller = new AbortController()
+  const { signal } = controller
+
+  inputEl.addEventListener(
+    'input',
+    (event) => {
+      if (event.target instanceof HTMLTextAreaElement) {
+        widget.value = event.target.value
+      }
+      widget.callback?.(widget.value)
+    },
+    { signal }
+  )
+
+  inputEl.addEventListener(
+    'dblclick',
+    () => {
+      inputEl.classList.add('editing')
+      setTimeout(() => textarea.focus(), 0)
+    },
+    { signal }
+  )
+
+  textarea.addEventListener('blur', () => inputEl.classList.remove('editing'), {
+    signal
+  })
+
+  textarea.addEventListener(
+    'change',
+    () => {
+      editor.commands.setContent(textarea.value)
+      widget.callback?.(widget.value)
+    },
+    { signal }
+  )
+
+  inputEl.addEventListener('keydown', (event) => event.stopPropagation(), {
+    signal
+  })
+
+  forwardMiddleButtonToCanvas(inputEl, signal)
+
+  widget.onRemove = useChainCallback(widget.onRemove, () => {
+    controller.abort()
+    if (!editor.isDestroyed) editor.destroy()
+  })
+
+  return widget
+}
+
+export const useMarkdownWidget = () => {
+  const widgetConstructor: ComfyWidgetConstructorV2 = (
+    node: LGraphNode,
+    inputSpec: InputSpec
+  ) => {
+    return addMarkdownWidget(node, inputSpec.name, {
+      defaultVal: inputSpec.default ?? ''
+    })
+  }
+
+  return widgetConstructor
+}

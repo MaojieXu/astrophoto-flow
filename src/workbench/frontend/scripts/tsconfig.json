@@ -1,0 +1,14 @@
+{
+  "extends": "../tsconfig.json",
+  "compilerOptions": {
+    /* Script files configuration */
+    "noEmit": true,
+    "tsBuildInfoFile": "../node_modules/.cache/tsbuildinfo/scripts.tsbuildinfo",
+    "strict": true,
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
+    "resolveJsonModule": true,
+    "types": ["node", "vitest/globals", "vite/client"]
+  },
+  "include": ["**/*.ts", "../src/types/**/*.d.ts", "../global.d.ts"]
+}

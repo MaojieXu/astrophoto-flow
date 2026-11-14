@@ -1,0 +1,22 @@
+# Bilingual-pair consistency record for .agents/notes/proposed/simplification/2026-11-14-no-distribution-engineering.md ↔ .agents/notes/proposed/simplification/2026-11-14-no-distribution-engineering.zh.md: per heading
+# section, a hash of its English and Chinese blocks outside code blocks and generated regions.
+# After editing either side, bring the other along and re-record with:
+#   pnpm run verify-translation-pairing --write .agents/notes/proposed/simplification/2026-11-14-no-distribution-engineering.md
+/agent-note-stop-before-the-distribution-layer:
+  en: 2b59a0f1304326b0
+  zh: 16c6a9fceb9e9262
+/agent-note-stop-before-the-distribution-layer/problem:
+  en: 48c0fedb58aa4f05
+  zh: 26abf0dc73d2d765
+/agent-note-stop-before-the-distribution-layer/proposal:
+  en: c7baa4cd2c635c7f
+  zh: 2f818231c9030245
+/agent-note-stop-before-the-distribution-layer/alternatives-considered:
+  en: 4ffdf62fadb29b1d
+  zh: 8441cca7c39d1e07
+/agent-note-stop-before-the-distribution-layer/acceptance-criteria:
+  en: 5a9d51eaa9dd3494
+  zh: eeb8a4ef6014712e
+/agent-note-stop-before-the-distribution-layer/risks:
+  en: 3aab9c2a8bf567fd
+  zh: 6ffb0aebb0e8ba1c

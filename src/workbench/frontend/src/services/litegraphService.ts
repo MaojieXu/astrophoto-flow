@@ -1,0 +1,1024 @@
+import { pick, zip } from 'es-toolkit/compat'
+
+import { downloadFile, openFileInNewTab } from '@/base/common/downloadUtil'
+import { visibleCanvasViewport } from '@/composables/canvas/visibleCanvasViewport'
+import { useSelectedLiteGraphItems } from '@/composables/canvas/useSelectedLiteGraphItems'
+import { useSubgraphOperations } from '@/composables/graph/useSubgraphOperations'
+import { useNodeAnimatedImage } from '@/composables/node/useNodeAnimatedImage'
+import { useNodeCanvasImagePreview } from '@/composables/node/useNodeCanvasImagePreview'
+import { useNodeImage, useNodeVideo } from '@/composables/node/useNodeImage'
+import {
+  addWidgetPromotionOptions,
+  isPreviewPseudoWidget
+} from '@/core/graph/subgraph/promotionUtils'
+import { applyDynamicInputs } from '@/core/graph/widgets/dynamicWidgets'
+import { resolveNodeDefSlotText, st, t } from '@/i18n'
+import {
+  LGraphCanvas,
+  LGraphEventMode,
+  LGraphNode,
+  LiteGraph,
+  RenderShape,
+  SubgraphNode,
+  createBounds,
+  outputAsSerialisable
+} from '@/lib/litegraph/src/litegraph'
+import type {
+  CreateNodeOptions,
+  GraphAddOptions,
+  IContextMenuValue,
+  INodeInputSlot,
+  Point,
+  Subgraph
+} from '@/lib/litegraph/src/litegraph'
+import type {
+  ExportedSubgraphInstance,
+  ISerialisableNodeInput,
+  ISerialisableNodeOutput,
+  ISerialisedNode
+} from '@/lib/litegraph/src/types/serialisation'
+import type { IBaseWidget } from '@/lib/litegraph/src/types/widgets'
+import { toConcreteWidget } from '@/lib/litegraph/src/widgets/widgetMap'
+import { useSettingStore } from '@/platform/settings/settingStore'
+import { useToast } from '@/components/ui/toast/toastStore'
+import { useWorkflowStore } from '@/platform/workflow/management/stores/workflowStore'
+import { createPromotedMultilineWidget } from '@/renderer/extensions/vueNodes/widgets/utils/multilineTextarea'
+import { useCanvasStore } from '@/renderer/core/canvas/canvasStore'
+import { useDialogService } from '@/services/dialogService'
+import { resolveSubgraphPseudoWidgetCache } from '@/services/subgraphPseudoWidgetCache'
+import type { SubgraphPseudoWidgetCache } from '@/services/subgraphPseudoWidgetCache'
+import { transformInputSpecV2ToV1 } from '@/schemas/nodeDef/migration'
+import type {
+  ComfyNodeDef as ComfyNodeDefV2,
+  InputSpec,
+  OutputSpec
+} from '@/schemas/nodeDef/nodeDefSchemaV2'
+import type {
+  ComfyNodeDef as ComfyNodeDefV1,
+  InputSpec as InputSpecV1
+} from '@/schemas/nodeDefSchema'
+import {
+  getInputSpecType,
+  zDynamicGroupInputSpec
+} from '@/schemas/nodeDefSchema'
+import { useApp } from '@/scripts/appInstance'
+import {
+  clipspace,
+  copyToClipspace,
+  pasteFromClipspace
+} from '@/scripts/clipspace'
+import { $el } from '@/scripts/ui/utils'
+import { useExecutionStore } from '@/stores/executionStore'
+import { useNodeOutputStore } from '@/stores/nodeOutputStore'
+import { ComfyNodeDefImpl } from '@/stores/nodeDefStore'
+import {
+  getPreviewExposureHostLocator,
+  usePreviewExposureStore
+} from '@/stores/previewExposureStore'
+import { useSubgraphStore } from '@/stores/subgraphStore'
+import { useFavoritedWidgetsStore } from '@/stores/workspace/favoritedWidgetsStore'
+import { useRightSidePanelStore } from '@/stores/workspace/rightSidePanelStore'
+import { useWidgetStore } from '@/stores/widgetStore'
+import { parseNodeId } from '@/types/nodeId'
+import type { SerializedNodeId } from '@/types/nodeId'
+import { isBlueprintType } from '@/utils/blueprintUtils'
+import { markCoreMediaMenuCallback } from '@/utils/coreMediaMenuActionUtils'
+import { getImageFileUrl } from '@/utils/hdrFormatUtil'
+import { getErrorMessage } from '@/utils/errorUtil'
+import type { WidgetId } from '@/types/widgetId'
+import { normalizeI18nKey } from '@/utils/formatUtil'
+import {
+  isAnimatedOutput,
+  isVideoNode,
+  isVideoOutput,
+  migrateWidgetsValues
+} from '@/utils/litegraphUtil'
+import { getOrderedInputSpecs } from '@/workbench/utils/nodeDefOrderingUtil'
+
+import { useExtensionService } from './extensionService'
+
+async function reencodeAsPngBlob(
+  blob: Blob,
+  width: number,
+  height: number
+): Promise<Blob> {
+  const canvas = $el('canvas', { width, height })
+  const ctx = canvas.getContext('2d')
+  if (!ctx) throw new Error('Could not get canvas context')
+
+  let image: ImageBitmap | HTMLImageElement
+  if (typeof window.createImageBitmap === 'undefined') {
+    const img = new Image()
+    const loaded = new Promise<void>((resolve, reject) => {
+      img.onload = () => resolve()
+      img.onerror = () => reject(new Error('Image load failed'))
+    })
+    img.src = URL.createObjectURL(blob)
+    try {
+      await loaded
+    } finally {
+      URL.revokeObjectURL(img.src)
+    }
+    image = img
+  } else {
+    image = await createImageBitmap(blob)
+  }
+
+  try {
+    ctx.drawImage(image, 0, 0)
+  } finally {
+    if ('close' in image && typeof image.close === 'function') {
+      image.close()
+    }
+  }
+
+  return new Promise<Blob>((resolve, reject) => {
+    canvas.toBlob((result) => {
+      if (result) resolve(result)
+      else reject(new Error('PNG conversion failed'))
+    }, 'image/png')
+  })
+}
+
+export const CONFIG = Symbol()
+export const GET_CONFIG = Symbol()
+
+export function getExtraOptionsForWidget(
+  node: LGraphNode,
+  widget: IBaseWidget
+) {
+  const options: IContextMenuValue[] = []
+  const input = node.inputs.find((inp) => inp.widget?.name === widget.name)
+
+  if (input) {
+    options.unshift({
+      content: `${t('contextMenu.RenameWidget')}: ${widget.label ?? widget.name}`,
+      callback: async () => {
+        const newLabel = await useDialogService().prompt({
+          title: t('g.rename'),
+          message: t('g.enterNewNamePrompt'),
+          defaultValue: widget.label,
+          placeholder: widget.name
+        })
+        if (newLabel === null) return
+        widget.label = newLabel || undefined
+        input.label = newLabel || undefined
+        widget.callback?.(widget.value)
+        useCanvasStore().canvas?.setDirty(true)
+      }
+    })
+  }
+
+  const favoritedWidgetsStore = useFavoritedWidgetsStore()
+  const isFavorited = favoritedWidgetsStore.isFavorited(node, widget.name)
+  options.unshift({
+    content: isFavorited
+      ? `${t('contextMenu.UnfavoriteWidget')}: ${widget.label ?? widget.name}`
+      : `${t('contextMenu.FavoriteWidget')}: ${widget.label ?? widget.name}`,
+    callback: () => {
+      favoritedWidgetsStore.toggleFavorite(node, widget.name)
+    }
+  })
+
+  if (node.graph && !node.graph.isRootGraph) {
+    addWidgetPromotionOptions(options, widget, node)
+  }
+  return options
+}
+
+function getMinSize(node: LGraphNode) {
+  node._initialMinSize ??= { width: 1, height: 1 }
+  return node._initialMinSize
+}
+
+/**
+ * Service that augments litegraph with ComfyUI specific functionality.
+ */
+export const useLitegraphService = () => {
+  const extensionService = useExtensionService()
+  const toast = useToast()
+  const widgetStore = useWidgetStore()
+  const canvasStore = useCanvasStore()
+  const { toggleSelectedNodesMode } = useSelectedLiteGraphItems()
+  const subgraphPseudoWidgetCache = new WeakMap<
+    SubgraphNode,
+    SubgraphPseudoWidgetCache<LGraphNode, IBaseWidget>
+  >()
+
+  function invalidateSubgraphPseudoWidgetCache(node: SubgraphNode) {
+    subgraphPseudoWidgetCache.delete(node)
+  }
+
+  function getPseudoWidgetPreviewTargets(node: SubgraphNode): LGraphNode[] {
+    const hostLocator = getPreviewExposureHostLocator(node)
+    if (!hostLocator) return []
+    const promotions = usePreviewExposureStore().getExposuresAsPromotionShape(
+      node.rootGraph.id,
+      hostLocator
+    )
+    const resolved = resolveSubgraphPseudoWidgetCache({
+      cache: subgraphPseudoWidgetCache.get(node) ?? null,
+      promotions,
+      getNodeById: (nodeId) => node.subgraph.getNodeById(nodeId) ?? undefined,
+      isPreviewPseudoWidget
+    })
+    subgraphPseudoWidgetCache.set(node, resolved.cache)
+    return resolved.nodes
+  }
+
+  /**
+   * @internal The node definition name used to resolve the node's i18n text.
+   */
+  function nodeDefName(node: LGraphNode): string {
+    return node.constructor.nodeData?.name ?? ''
+  }
+  /**
+   * @internal Add input sockets to the node. (No widget)
+   */
+  function addInputSocket(node: LGraphNode, inputSpec: InputSpec) {
+    const inputName = inputSpec.name
+    const widgetConstructor = widgetStore.widgets.get(
+      inputSpec.widgetType ?? inputSpec.type
+    )
+    if (
+      (widgetConstructor && !inputSpec.forceInput) ||
+      applyDynamicInputs(node, inputSpec)
+    )
+      return
+
+    node.addInput(inputName, inputSpec.type, {
+      shape: inputSpec.isOptional ? RenderShape.HollowCircle : undefined,
+      localized_name: resolveNodeDefSlotText(
+        'name',
+        nodeDefName(node),
+        inputName,
+        inputSpec.display_name,
+        inputName
+      )
+    })
+  }
+  /**
+   * @internal Setup stroke styles for the node under various conditions.
+   */
+  function setupStrokeStyles(node: LGraphNode) {
+    node.strokeStyles['running'] = function (this: LGraphNode) {
+      const nodeLocatorId = useWorkflowStore().nodeIdToNodeLocatorId(this.id)
+      const state =
+        useExecutionStore().nodeLocationProgressStates[nodeLocatorId]?.state
+      if (state === 'running') {
+        return { color: '#0f0', lineWidth: 3 }
+      }
+    }
+    node.strokeStyles['dragOver'] = function (this: LGraphNode) {
+      if (useApp().dragOverNode?.id == this.id) {
+        return { color: 'dodgerblue' }
+      }
+    }
+    node.strokeStyles['executionError'] = function (this: LGraphNode) {
+      if (useApp().lastExecutionError?.node_id == this.id) {
+        return { color: LiteGraph.NODE_ERROR_COLOUR, lineWidth: 3 }
+      }
+    }
+  }
+
+  /**
+   * Utility function. Implemented for use with dynamic widgets
+   */
+  function addNodeInput(node: LGraphNode, inputSpec: InputSpec) {
+    addInputSocket(node, inputSpec)
+    addInputWidget(node, inputSpec, { dynamic: true })
+  }
+
+  function validateDynamicGroupWidgets(inputData: InputSpecV1, name: string) {
+    const { template } = zDynamicGroupInputSpec.parse(inputData)[1]
+    const fields = { ...template.required, ...template.optional }
+    for (const [field, spec] of Object.entries(fields)) {
+      if (
+        !widgetStore.widgets.has(spec[1]?.widgetType ?? getInputSpecType(spec))
+      )
+        throw new TypeError(
+          `DynamicGroup field '${name}.${field}' requires a registered widget`
+        )
+    }
+  }
+
+  /**
+   * @internal Add a widget to the node. For both primitive types and custom widgets
+   * (unless `socketless`), an input socket is also added.
+   */
+  function addInputWidget(
+    node: LGraphNode,
+    inputSpec: InputSpec,
+    { dynamic }: { dynamic?: boolean } = {}
+  ) {
+    const widgetInputSpec = { ...inputSpec }
+    if (inputSpec.widgetType) {
+      widgetInputSpec.type = inputSpec.widgetType
+    }
+    const inputName = inputSpec.name
+    const resolveLabel = (fallback: string) =>
+      resolveNodeDefSlotText(
+        'name',
+        nodeDefName(node),
+        inputName,
+        widgetInputSpec.display_name,
+        fallback
+      )
+    const widgetConstructor = widgetStore.widgets.get(widgetInputSpec.type)
+    if (!widgetConstructor || inputSpec.forceInput) return
+
+    const inputData = transformInputSpecV2ToV1(widgetInputSpec)
+    if (widgetInputSpec.type === 'COMFY_DYNAMICGROUP_V3')
+      validateDynamicGroupWidgets(inputData, inputName)
+    const widgetsBefore = new Set(node.widgets ?? [])
+    const result = widgetConstructor(node, inputName, inputData, useApp())
+    const wrappedResult = result && !('type' in result) ? result : undefined
+    const { minWidth = 1, minHeight = 1 } = wrappedResult ?? {}
+    const returnedWidget = result && 'type' in result ? result : result?.widget
+    if (returnedWidget) {
+      // oxlint-disable-next-line typescript/no-unnecessary-condition -- extension widgets may omit options at runtime
+      returnedWidget.options ??= {}
+    }
+    const widget =
+      (node.widgets ?? []).find(
+        (candidate) =>
+          candidate === returnedWidget ||
+          (!widgetsBefore.has(candidate) &&
+            (!returnedWidget || candidate.name === returnedWidget.name))
+      ) ?? (returnedWidget ? toConcreteWidget(returnedWidget, node) : undefined)
+    if (!widget) return
+
+    widget.label = resolveLabel(
+      widget.label ?? widgetInputSpec.display_name ?? inputName
+    )
+    Object.assign(widget.options, {
+      advanced: inputSpec.advanced
+    })
+    if (inputSpec.hidden !== undefined) widget.hidden = inputSpec.hidden
+    if (dynamic) widget.tooltip = inputSpec.tooltip
+
+    if (!widget.options.socketless) {
+      const inputSpecV1 = transformInputSpecV2ToV1(widgetInputSpec)
+      node.addInput(inputName, inputSpec.type, {
+        shape: inputSpec.isOptional ? RenderShape.HollowCircle : undefined,
+        localized_name: resolveLabel(inputName),
+        widget: { name: inputName, [GET_CONFIG]: () => inputSpecV1 }
+      })
+    }
+    const minSize = getMinSize(node)
+    minSize.width = Math.max(minSize.width, minWidth)
+    minSize.height = Math.max(minSize.height, minHeight)
+  }
+
+  /**
+   * @internal Add inputs to the node.
+   */
+  function addInputs(node: LGraphNode, inputs: Record<string, InputSpec>) {
+    // Use input_order if available to ensure consistent widget ordering
+    const orderedInputSpecs = getOrderedInputSpecs(
+      node.constructor.nodeData ?? {},
+      inputs
+    )
+
+    // Create sockets and widgets in the determined order
+    for (const inputSpec of orderedInputSpecs) addInputSocket(node, inputSpec)
+    for (const inputSpec of orderedInputSpecs) addInputWidget(node, inputSpec)
+  }
+
+  /**
+   * @internal Add outputs to the node.
+   */
+  function addOutputs(node: LGraphNode, outputs: OutputSpec[]) {
+    for (const output of outputs) {
+      const { name, is_list } = output
+      // TODO: Fix the typing at the node spec level
+      const type = output.type === 'COMFY_MATCHTYPE_V3' ? '*' : output.type
+      const shapeOptions = is_list ? { shape: LiteGraph.GRID_SHAPE } : {}
+      const typeKey = `dataTypes.${normalizeI18nKey(type)}`
+      const outputOptions = {
+        ...shapeOptions,
+        // If the output name is different from the output type, use the output name.
+        // e.g.
+        // - type ("INT"); name ("Positive") => translate name
+        // - type ("FLOAT"); name ("FLOAT") => translate type
+        localized_name:
+          type !== name
+            ? resolveNodeDefSlotText(
+                'name',
+                nodeDefName(node),
+                output.index,
+                name
+              )
+            : st(typeKey, name)
+      }
+      node.addOutput(name, type, outputOptions)
+    }
+  }
+
+  /**
+   * @internal Set the initial size of the node.
+   */
+  function setInitialSize(node: LGraphNode) {
+    const s = node.computeSize()
+    // Expand the width a little to fit widget values on screen.
+    const pad =
+      node.widgets?.length &&
+      !useSettingStore().get('LiteGraph.Node.DefaultPadding')
+    const minSize = getMinSize(node)
+    s[0] = Math.max(minSize.width, s[0] + (pad ? 60 : 0))
+    s[1] = Math.max(minSize.height, s[1])
+    node.setSize(s)
+  }
+
+  function registerSubgraphNodeDef(
+    nodeDefV1: ComfyNodeDefV1,
+    subgraph: Subgraph,
+    instanceData: ExportedSubgraphInstance
+  ) {
+    const node = class ComfyNode extends SubgraphNode {
+      static comfyClass: string
+      static override title: string
+      static override category: string
+      static override nodeData: ComfyNodeDefV1 & ComfyNodeDefV2
+
+      constructor() {
+        super(useApp().rootGraph, subgraph, instanceData)
+
+        subgraph.events.addEventListener('widget-promoted', () => {
+          invalidateSubgraphPseudoWidgetCache(this)
+        })
+
+        subgraph.events.addEventListener('widget-demoted', () => {
+          invalidateSubgraphPseudoWidgetCache(this)
+        })
+
+        setupStrokeStyles(this)
+        addInputs(this, ComfyNode.nodeData.inputs)
+        addOutputs(this, ComfyNode.nodeData.outputs)
+        setInitialSize(this)
+        this.serialize_widgets = true
+        void extensionService.invokeExtensionsAsync('nodeCreated', this)
+      }
+
+      protected override createPromotedHostWidget(
+        input: INodeInputSlot,
+        widgetId: WidgetId,
+        sourceWidget: Readonly<IBaseWidget>
+      ): IBaseWidget | undefined {
+        return createPromotedMultilineWidget({
+          subgraphNode: this,
+          input,
+          widgetId,
+          sourceWidget
+        })
+      }
+
+      /**
+       * Configure the node from a serialised node. Keep 'name', 'type', 'shape',
+       * and 'localized_name' information from the original node definition.
+       */
+      override configure(data: ISerialisedNode): void {
+        const RESERVED_KEYS = ['name', 'type', 'shape', 'localized_name']
+
+        // Note: input name is unique in a node definition, so we can lookup
+        // input by name.
+        const inputByName = new Map<string, ISerialisableNodeInput>(
+          data.inputs?.map((input) => [input.name, input]) ?? []
+        )
+        // Inputs defined by the node definition.
+        const definedInputNames = new Set(
+          this.inputs.map((input) => input.name)
+        )
+        const definedInputs = this.inputs.map((input) => {
+          const inputData = inputByName.get(input.name)
+          return inputData
+            ? {
+                ...inputData,
+                // Whether the input has associated widget follows the
+                // original node definition.
+                ...pick(input, RESERVED_KEYS.concat('widget'))
+              }
+            : input
+        })
+        // Extra inputs that potentially dynamically added by custom js logic.
+        const extraInputs = data.inputs?.filter(
+          (input) => !definedInputNames.has(input.name)
+        )
+        data.inputs = [...definedInputs, ...(extraInputs ?? [])]
+
+        // Note: output name is not unique, so we cannot lookup output by name.
+        // Use index instead.
+        data.outputs = zip(this.outputs, data.outputs ?? []).map(
+          ([output, outputData], index) => {
+            // If there are extra outputs in the serialised node, use them directly.
+            // There are currently custom nodes that dynamically add outputs via
+            // js logic.
+            if (!output) return outputData as ISerialisableNodeOutput
+
+            return outputData
+              ? {
+                  ...outputData,
+                  ...pick(output, RESERVED_KEYS)
+                }
+              : outputAsSerialisable(output, this, index)
+          }
+        )
+
+        data.widgets_values = migrateWidgetsValues(
+          ComfyNode.nodeData.inputs,
+          this.widgets,
+          data.widgets_values ?? []
+        )
+
+        super.configure(data)
+      }
+    }
+
+    addNodeContextMenuHandler(node)
+    addDrawBackgroundHandler(node)
+    addNodeKeyHandler(node)
+    // Note: Some extensions expects node.comfyClass to be set in
+    // `beforeRegisterNodeDef`.
+    node.prototype.comfyClass = nodeDefV1.name
+    node.comfyClass = nodeDefV1.name
+
+    const nodeDef = new ComfyNodeDefImpl(nodeDefV1)
+    node.nodeData = nodeDef
+    LiteGraph.registerNodeType(subgraph.id, node)
+    // Note: Do not following assignments before `LiteGraph.registerNodeType`
+    // because `registerNodeType` will overwrite the assignments.
+    node.category = nodeDef.category
+    node.skip_list = true
+    node.title = nodeDef.display_name || nodeDef.name
+  }
+
+  async function registerNodeDef(nodeId: string, nodeDefV1: ComfyNodeDefV1) {
+    const node = class ComfyNode extends LGraphNode {
+      static comfyClass: string
+      static override title: string
+      static override category: string
+      static override nodeData: ComfyNodeDefV1 & ComfyNodeDefV2
+
+      constructor(title: string) {
+        super(title)
+        setupStrokeStyles(this)
+        addInputs(this, ComfyNode.nodeData.inputs)
+        addOutputs(this, ComfyNode.nodeData.outputs)
+        setInitialSize(this)
+        this.serialize_widgets = true
+
+        // Mark API Nodes yellow by default to distinguish with other nodes.
+        if (ComfyNode.nodeData.api_node) {
+          this.color = LGraphCanvas.node_colors.yellow.color
+          this.bgcolor = LGraphCanvas.node_colors.yellow.bgcolor
+        }
+
+        void extensionService.invokeExtensionsAsync('nodeCreated', this)
+      }
+
+      /**
+       * Configure the node from a serialised node. Keep 'name', 'type', 'shape',
+       * and 'localized_name' information from the original node definition.
+       */
+      override configure(data: ISerialisedNode): void {
+        const RESERVED_KEYS = ['name', 'type', 'shape', 'localized_name']
+
+        // Note: input name is unique in a node definition, so we can lookup
+        // input by name.
+        const inputByName = new Map<string, ISerialisableNodeInput>(
+          data.inputs?.map((input) => [input.name, input]) ?? []
+        )
+        // Inputs defined by the node definition.
+        const definedInputNames = new Set(
+          this.inputs.map((input) => input.name)
+        )
+        const definedInputs = this.inputs.map((input) => {
+          const inputData = inputByName.get(input.name)
+          return inputData
+            ? {
+                ...inputData,
+                // Whether the input has associated widget follows the
+                // original node definition.
+                ...pick(input, RESERVED_KEYS.concat('widget'))
+              }
+            : input
+        })
+        // Extra inputs that potentially dynamically added by custom js logic.
+        const extraInputs = data.inputs?.filter(
+          (input) => !definedInputNames.has(input.name)
+        )
+        data.inputs = [...definedInputs, ...(extraInputs ?? [])]
+
+        // Note: output name is not unique, so we cannot lookup output by name.
+        // Use index instead.
+        data.outputs = zip(this.outputs, data.outputs ?? []).map(
+          ([output, outputData], index) => {
+            // If there are extra outputs in the serialised node, use them directly.
+            // There are currently custom nodes that dynamically add outputs via
+            // js logic.
+            if (!output) return outputData as ISerialisableNodeOutput
+
+            return outputData
+              ? {
+                  ...outputData,
+                  ...pick(output, RESERVED_KEYS)
+                }
+              : outputAsSerialisable(output, this, index)
+          }
+        )
+
+        data.widgets_values = migrateWidgetsValues(
+          ComfyNode.nodeData.inputs,
+          this.widgets ?? [],
+          data.widgets_values ?? []
+        )
+
+        super.configure(data)
+      }
+    }
+
+    addNodeContextMenuHandler(node)
+    addDrawBackgroundHandler(node)
+    addNodeKeyHandler(node)
+    // Note: Some extensions expects node.comfyClass to be set in
+    // `beforeRegisterNodeDef`.
+    node.prototype.comfyClass = nodeDefV1.name
+    node.comfyClass = nodeDefV1.name
+    await extensionService.invokeExtensionsAsync(
+      'beforeRegisterNodeDef',
+      node,
+      nodeDefV1 // Receives V1 NodeDef, and potentially make modifications to it
+    )
+
+    const nodeDef = new ComfyNodeDefImpl(nodeDefV1)
+    node.nodeData = nodeDef
+    LiteGraph.registerNodeType(nodeId, node)
+    // Note: Do not following assignments before `LiteGraph.registerNodeType`
+    // because `registerNodeType` will overwrite the assignments.
+    node.category = nodeDef.category
+    node.title = nodeDef.display_name || nodeDef.name
+
+    // Set skip_list for dev-only nodes based on current DevMode setting
+    // This ensures nodes registered after initial load respect the current setting
+    if (nodeDef.dev_only) {
+      const settingStore = useSettingStore()
+      node.skip_list = !settingStore.get('Comfy.DevMode')
+    }
+  }
+
+  /**
+   * Adds special context menu handling for nodes
+   * e.g. this adds Open Image functionality for nodes that show images
+   * @param {*} node The node to add the menu handler
+   */
+  function addNodeContextMenuHandler(node: typeof LGraphNode) {
+    function getCopyImageOption(img: HTMLImageElement): IContextMenuValue[] {
+      if (typeof window.ClipboardItem === 'undefined') return []
+      return [
+        {
+          content: 'Copy Image',
+          callback: markCoreMediaMenuCallback(async () => {
+            const url = new URL(img.src)
+            url.searchParams.delete('preview')
+
+            try {
+              const data = await fetch(url)
+              const blob = await data.blob()
+              try {
+                await navigator.clipboard.write([
+                  new ClipboardItem({ [blob.type]: blob })
+                ])
+              } catch (error) {
+                // Chrome seems to only support PNG on write, convert and try again
+                if (blob.type !== 'image/png') {
+                  const pngBlob = await reencodeAsPngBlob(
+                    blob,
+                    img.naturalWidth,
+                    img.naturalHeight
+                  )
+                  await navigator.clipboard.write([
+                    new ClipboardItem({ 'image/png': pngBlob })
+                  ])
+                  return
+                }
+                throw error
+              }
+            } catch (error) {
+              toast.warning(
+                t('toastMessages.errorCopyImage', {
+                  error: getErrorMessage(error) ?? t('g.unknownError')
+                })
+              )
+            }
+          }, 'preview')
+        }
+      ]
+    }
+
+    node.prototype.getExtraMenuOptions = function (canvas, options) {
+      if (this.imgs) {
+        let img
+        if (this.imageIndex != null) {
+          img = this.imgs[this.imageIndex]
+        } else if (this.overIndex != null) {
+          img = this.imgs[this.overIndex]
+        }
+        if (img) {
+          options.unshift(
+            {
+              content: 'Open Image',
+              callback: markCoreMediaMenuCallback(() => {
+                const url = getImageFileUrl(img)
+                void openFileInNewTab(url.toString())
+              }, 'preview')
+            },
+            ...getCopyImageOption(img),
+            {
+              content: 'Save Image',
+              callback: markCoreMediaMenuCallback(() => {
+                const url = getImageFileUrl(img)
+                const filename = new URLSearchParams(url.search).get('filename')
+                downloadFile(url.toString(), filename ?? undefined)
+              }, 'preview')
+            }
+          )
+        }
+      }
+
+      options.push({
+        content: 'Bypass',
+        callback: () => {
+          toggleSelectedNodesMode(LGraphEventMode.BYPASS)
+          canvas.setDirty(true, true)
+        }
+      })
+
+      if (!clipspace.returnNode) {
+        options.push({
+          content: 'Copy (Clipspace)',
+          callback: () => {
+            copyToClipspace(this)
+          }
+        })
+
+        if (clipspace.current != null) {
+          options.push({
+            content: 'Paste (Clipspace)',
+            callback: markCoreMediaMenuCallback(() => {
+              pasteFromClipspace(this)
+            }, 'input')
+          })
+        }
+      }
+      if (this instanceof SubgraphNode) {
+        options.unshift(
+          {
+            content: 'Edit Subgraph Widgets',
+            callback: () => {
+              useRightSidePanelStore().openPanel('subgraph')
+            }
+          },
+          {
+            content: 'Unpack Subgraph',
+            callback: () => {
+              const { unpackSubgraph } = useSubgraphOperations()
+              unpackSubgraph()
+            }
+          }
+        )
+      }
+      const [x, y] = canvas.graph_mouse
+      const overWidget = this.getWidgetOnPos(x, y, true)
+      if (overWidget)
+        options.unshift(...getExtraOptionsForWidget(this, overWidget))
+      return []
+    }
+  }
+  function updatePreviews(node: LGraphNode, callback?: () => void) {
+    try {
+      unsafeUpdatePreviews.call(node, callback)
+    } catch (error) {
+      console.error('Error drawing node background', error)
+    }
+  }
+  function unsafeUpdatePreviews(this: LGraphNode, callback?: () => void) {
+    if (this.flags.collapsed) return
+
+    const nodeOutputStore = useNodeOutputStore()
+    const { showAnimatedPreview, removeAnimatedPreview } =
+      useNodeAnimatedImage()
+    const { showCanvasImagePreview, removeCanvasImagePreview } =
+      useNodeCanvasImagePreview()
+
+    const output = nodeOutputStore.getNodeOutputs(this)
+    const preview = nodeOutputStore.getNodePreviews(this)
+
+    const isNewOutput = output && this.images !== output.images
+    const isNewPreview = preview && this.preview !== preview
+
+    if (isNewPreview) this.preview = preview
+    if (isNewOutput) this.images = output.images
+
+    if (isNewOutput || isNewPreview) {
+      this.animatedImages = isAnimatedOutput(output)
+
+      const isVideo = isVideoOutput(output) || isVideoNode(this)
+      if (isVideo) {
+        useNodeVideo(this, callback).showPreview()
+      } else {
+        useNodeImage(this, callback).showPreview()
+      }
+    }
+
+    // Nothing to do
+    if (!this.imgs?.length) return
+
+    if (this.animatedImages) {
+      removeCanvasImagePreview(this)
+      showAnimatedPreview(this)
+    } else {
+      removeAnimatedPreview(this)
+      showCanvasImagePreview(this)
+    }
+  }
+
+  /**
+   * Adds Custom drawing logic for nodes
+   * e.g. Draws images and handles thumbnail navigation on nodes that output images
+   * @param {*} node The node to add the draw handler
+   */
+  function addDrawBackgroundHandler(node: typeof LGraphNode) {
+    /**
+     * @deprecated No longer needed as we use {@link useImagePreviewWidget}
+     */
+    node.prototype.setSizeForImage = function (this: LGraphNode) {
+      console.warn(
+        'node.setSizeForImage is deprecated. Now it has no effect. Please remove the call to it.'
+      )
+    }
+    node.prototype.onDrawBackground = function () {
+      updatePreviews(this)
+
+      if (this instanceof SubgraphNode) {
+        const parentGraph = this.graph
+        for (const interiorNode of getPseudoWidgetPreviewTargets(this)) {
+          updatePreviews(interiorNode, () => {
+            parentGraph?.setDirtyCanvas(true)
+          })
+        }
+      }
+    }
+  }
+
+  function addNodeKeyHandler(node: typeof LGraphNode) {
+    const origNodeOnKeyDown = node.prototype.onKeyDown
+
+    node.prototype.onKeyDown = function (e) {
+      const originalResult: unknown = origNodeOnKeyDown?.call(this, e)
+      if (originalResult === false) {
+        return false
+      }
+
+      if (this.flags.collapsed || !this.imgs || this.imageIndex === null) {
+        return
+      }
+
+      let handled = false
+
+      if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') {
+        const imageIndex = this.imageIndex
+        if (imageIndex === undefined) return
+        if (e.key === 'ArrowLeft') {
+          this.imageIndex = imageIndex - 1
+        } else {
+          this.imageIndex = imageIndex + 1
+        }
+        this.imageIndex %= this.imgs.length
+
+        if (this.imageIndex < 0) {
+          this.imageIndex = this.imgs.length + this.imageIndex
+        }
+        handled = true
+      } else if (e.key === 'Escape') {
+        this.imageIndex = null
+        handled = true
+      }
+
+      if (handled) {
+        e.preventDefault()
+        e.stopImmediatePropagation()
+        return false
+      }
+    }
+  }
+
+  function addNodeOnGraph(
+    nodeDef: ComfyNodeDefV1 | ComfyNodeDefV2,
+    options: CreateNodeOptions = {},
+    addOptions?: GraphAddOptions
+  ): LGraphNode | null {
+    options.pos ??= getCanvasCenter()
+
+    if (isBlueprintType(nodeDef.name)) {
+      const canvas = canvasStore.getCanvas()
+      const bp = useSubgraphStore().getBlueprint(nodeDef.name)
+      const items: object = {
+        nodes: bp.nodes,
+        subgraphs: bp.definitions?.subgraphs
+      }
+      const results = canvas._deserializeItems(items, {
+        position: options.pos
+      })
+      if (!results) throw new Error('Failed to add subgraph blueprint')
+      const node = results.nodes.values().next().value
+      if (!node)
+        throw new Error(
+          'Subgraph blueprint was added, but failed to resolve a subgraph Node'
+        )
+      if (addOptions?.ghost) {
+        node.flags.ghost = true
+        canvas.graph?.trigger('node:property:changed', {
+          nodeId: node.id,
+          property: 'flags.ghost',
+          oldValue: false,
+          newValue: true
+        })
+        canvas.startGhostPlacement(node, addOptions.dragEvent)
+      }
+      return node
+    }
+
+    const node = LiteGraph.createNode(
+      nodeDef.name,
+      nodeDef.display_name,
+      options
+    )
+
+    const graph = useWorkflowStore().activeSubgraph ?? useApp().graph
+    if (!node) return null
+
+    graph.add(node, addOptions)
+    return node
+  }
+
+  function getCanvasCenter(): Point {
+    if (!useApp().isGraphReady) return [0, 0]
+    const visibleArea = useApp().canvas.ds.visible_area
+    const [x, y, w, h] = visibleArea
+    return [x + w / 2, y + h / 2]
+  }
+
+  function goToNode(nodeId: SerializedNodeId) {
+    const parsedNodeId = parseNodeId(nodeId)
+    if (!parsedNodeId) return
+    const graphNode = useApp().canvas.graph?.getNodeById(parsedNodeId)
+    if (!graphNode) return
+    useApp().canvas.animateToBounds(graphNode.boundingRect)
+  }
+
+  function ensureBounds(nodes: LGraphNode[]) {
+    for (const node of nodes) {
+      if (!node.boundingRect.every((i) => i === 0)) continue
+      node.updateArea()
+    }
+  }
+
+  /**
+   * Resets the canvas view to the default
+   */
+  function resetView() {
+    const canvas = canvasStore.canvas
+    if (!canvas) return
+
+    canvas.ds.scale = 1
+    canvas.ds.offset = [0, 0]
+    canvas.setDirty(true, true)
+  }
+
+  function fitView() {
+    const canvas = canvasStore.getCanvas()
+    const nodes = canvas.graph?.nodes
+    if (!nodes) return
+    ensureBounds(nodes)
+    const bounds = createBounds(nodes)
+    if (!bounds) return
+
+    canvas.ds.fitToBounds(bounds, {
+      viewport: visibleCanvasViewport(canvas)
+    })
+    canvas.setDirty(true, true)
+  }
+
+  return {
+    registerNodeDef,
+    registerSubgraphNodeDef,
+    addNodeOnGraph,
+    addNodeInput,
+    getCanvasCenter,
+    getExtraOptionsForWidget,
+    goToNode,
+    resetView,
+    fitView,
+    updatePreviews
+  }
+}

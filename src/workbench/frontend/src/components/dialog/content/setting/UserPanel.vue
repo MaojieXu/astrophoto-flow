@@ -1,0 +1,141 @@
+<template>
+  <div class="user-settings-container h-full">
+    <div class="flex h-full flex-col">
+      <h2 class="mb-2 text-2xl font-bold">{{ $t('userSettings.title') }}</h2>
+      <div class="mt-4 mb-3 border-t border-interface-stroke" />
+
+      <!-- Normal User Panel -->
+      <div v-if="isLoggedIn" class="flex flex-col gap-2">
+        <UserAvatar
+          v-if="userPhotoUrl"
+          :photo-url="userPhotoUrl"
+          size="large"
+        />
+
+        <div class="flex flex-col gap-0.5">
+          <h3 class="font-medium">
+            {{ $t('userSettings.name') }}
+          </h3>
+          <div class="text-muted">
+            {{ userDisplayName || $t('userSettings.notSet') }}
+          </div>
+        </div>
+
+        <div class="flex flex-col gap-0.5">
+          <h3 class="font-medium">
+            {{ $t('userSettings.email') }}
+          </h3>
+          <span class="text-muted">
+            {{ userEmail }}
+          </span>
+        </div>
+
+        <div class="flex flex-col gap-0.5">
+          <h3 class="font-medium">
+            {{ $t('userSettings.provider') }}
+          </h3>
+          <div class="flex items-center gap-1 text-muted">
+            <i :class="providerIcon" />
+            {{ providerName }}
+            <Button
+              v-if="isEmailProvider"
+              :tooltip="$t('userSettings.updatePassword')"
+              variant="muted-textonly"
+              size="icon-sm"
+              :aria-label="$t('userSettings.updatePassword')"
+              @click="onUpdatePassword"
+            >
+              <i class="pi pi-pen-to-square" />
+            </Button>
+          </div>
+        </div>
+
+        <Spinner v-if="loading" class="mt-4 size-8" />
+        <div v-else class="mt-4 flex flex-col gap-2">
+          <div class="flex flex-wrap items-center gap-2">
+            <Button class="w-32" variant="secondary" @click="handleSignOut">
+              <i class="pi pi-sign-out" />
+              {{ $t('auth.signOut.signOut') }}
+            </Button>
+            <SignOutEverywhereButton />
+          </div>
+          <i18n-t
+            v-if="!isApiKeyLogin"
+            keypath="auth.deleteAccount.contactSupport"
+            tag="p"
+            class="text-sm text-muted"
+          >
+            <template #email>
+              <a href="mailto:support@comfy.org" class="underline"
+                >support@comfy.org</a
+              >
+            </template>
+          </i18n-t>
+        </div>
+      </div>
+
+      <!-- Login Section -->
+      <div v-else class="flex flex-col gap-4">
+        <p class="text-smoke-600">
+          {{ $t('auth.login.title') }}
+        </p>
+
+        <Button class="w-52" variant="primary" :loading @click="handleSignIn">
+          <i class="pi pi-user" />
+          {{ $t('auth.login.signInOrSignUp') }}
+        </Button>
+      </div>
+    </div>
+  </div>
+</template>
+
+<script setup lang="ts">
+import { useI18n } from 'vue-i18n'
+import { useRouter } from 'vue-router'
+
+import UserAvatar from '@/components/common/UserAvatar.vue'
+import Button from '@/components/ui/button/Button.vue'
+import Spinner from '@/components/ui/spinner/Spinner.vue'
+import { useCurrentUser } from '@/composables/auth/useCurrentUser'
+import SignOutEverywhereButton from '@/platform/auth/session/components/SignOutEverywhereButton.vue'
+import { useAuthDialogs } from '@/composables/auth/useAuthDialogs'
+import { useDialogService } from '@/services/dialogService'
+
+const { t } = useI18n()
+const router = useRouter()
+const dialogService = useDialogService()
+const { showUpdatePasswordDialog } = useAuthDialogs()
+const {
+  loading,
+  isLoggedIn,
+  isApiKeyLogin,
+  isEmailProvider,
+  needsFirebaseSignIn,
+  userDisplayName,
+  userEmail,
+  userPhotoUrl,
+  providerName,
+  providerIcon,
+  handleSignOut,
+  handleSignIn
+} = useCurrentUser()
+async function onUpdatePassword() {
+  if (!needsFirebaseSignIn.value) {
+    await showUpdatePasswordDialog()
+    return
+  }
+  const confirmed = await dialogService.confirm({
+    title: t('auth.reauthRequired.title'),
+    message: t('auth.reauthRequired.message')
+  })
+  if (!confirmed) return
+  const { href } = router.resolve({
+    name: 'cloud-login',
+    query: {
+      switchAccount: 'true',
+      previousFullPath: encodeURIComponent(router.currentRoute.value.fullPath)
+    }
+  })
+  window.location.assign(href)
+}
+</script>

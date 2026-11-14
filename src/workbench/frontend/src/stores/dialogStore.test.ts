@@ -1,0 +1,361 @@
+import { describe, expect, it, vi } from 'vitest'
+import { defineComponent } from 'vue'
+
+import { useDialogStore } from '@/stores/dialogStore'
+
+const MockComponent = defineComponent({
+  name: 'MockComponent',
+  template: '<div>Mock</div>'
+})
+
+const MockContentPropsComponent = defineComponent({
+  name: 'MockContentPropsComponent',
+  props: {
+    openingAction: {
+      type: String,
+      default: null
+    }
+  },
+  template: '<div>Mock</div>'
+})
+
+describe('dialogStore', () => {
+  describe('priority system', () => {
+    it('should create dialogs in correct priority order', () => {
+      const store = useDialogStore()
+
+      // Create dialogs with different priorities
+      store.showDialog({
+        key: 'low-priority',
+        component: MockComponent,
+        priority: 0
+      })
+
+      store.showDialog({
+        key: 'high-priority',
+        component: MockComponent,
+        priority: 10
+      })
+
+      store.showDialog({
+        key: 'medium-priority',
+        component: MockComponent,
+        priority: 5
+      })
+
+      store.showDialog({
+        key: 'no-priority',
+        component: MockComponent
+      })
+
+      // Check order: high (2) -> medium (1) -> low (0)
+      expect(store.dialogStack.map((d) => d.key)).toEqual([
+        'high-priority',
+        'medium-priority',
+        'no-priority',
+        'low-priority'
+      ])
+    })
+
+    it('should maintain priority order when rising dialogs', () => {
+      const store = useDialogStore()
+
+      // Create dialogs with different priorities
+      store.showDialog({
+        key: 'priority-2',
+        component: MockComponent,
+        priority: 2
+      })
+
+      store.showDialog({
+        key: 'priority-1',
+        component: MockComponent,
+        priority: 1
+      })
+
+      store.showDialog({
+        key: 'priority-0',
+        component: MockComponent,
+        priority: 0
+      })
+
+      // Try to rise the lowest priority dialog
+      store.riseDialog({ key: 'priority-0' })
+
+      // Should still be at the bottom because of its priority
+      expect(store.dialogStack.map((d) => d.key)).toEqual([
+        'priority-2',
+        'priority-1',
+        'priority-0'
+      ])
+
+      // Rise the medium priority dialog
+      store.riseDialog({ key: 'priority-1' })
+
+      // Should be above priority-0 but below priority-2
+      expect(store.dialogStack.map((d) => d.key)).toEqual([
+        'priority-2',
+        'priority-1',
+        'priority-0'
+      ])
+    })
+
+    it('should keep high priority dialogs on top when creating new lower priority dialogs', () => {
+      const store = useDialogStore()
+
+      // Create a high priority dialog (like manager progress)
+      store.showDialog({
+        key: 'manager-progress',
+        component: MockComponent,
+        priority: 10
+      })
+
+      store.showDialog({
+        key: 'dialog-2',
+        component: MockComponent,
+        priority: 0
+      })
+
+      store.showDialog({
+        key: 'dialog-3',
+        component: MockComponent
+        // Default priority is 1
+      })
+
+      // Manager progress should still be on top
+      expect(store.dialogStack[0].key).toBe('manager-progress')
+
+      // Check full order
+      expect(store.dialogStack.map((d) => d.key)).toEqual([
+        'manager-progress', // priority 2
+        'dialog-3', // priority 1 (default)
+        'dialog-2' // priority 0
+      ])
+    })
+  })
+
+  describe('basic dialog operations', () => {
+    it('should show and close dialogs', () => {
+      const store = useDialogStore()
+
+      store.showDialog({
+        key: 'test-dialog',
+        component: MockComponent
+      })
+
+      expect(store.dialogStack).toHaveLength(1)
+      expect(store.isDialogOpen('test-dialog')).toBe(true)
+
+      store.closeDialog({ key: 'test-dialog' })
+
+      expect(store.dialogStack).toHaveLength(0)
+      expect(store.isDialogOpen('test-dialog')).toBe(false)
+    })
+
+    it('fires both onClose and onRemoved when a dialog is closed', () => {
+      const store = useDialogStore()
+      const onClose = vi.fn()
+      const onRemoved = vi.fn()
+
+      store.showDialog({
+        key: 'test-dialog',
+        component: MockComponent,
+        dialogComponentProps: { onClose, onRemoved }
+      })
+
+      store.closeDialog({ key: 'test-dialog' })
+
+      expect(onClose).toHaveBeenCalledTimes(1)
+      expect(onRemoved).toHaveBeenCalledTimes(1)
+    })
+
+    it('should reuse existing dialog when showing with same key', () => {
+      const store = useDialogStore()
+
+      store.showDialog({
+        key: 'reusable-dialog',
+        component: MockComponent,
+        title: 'Original Title'
+      })
+
+      // First call should create the dialog
+      expect(store.dialogStack).toHaveLength(1)
+      expect(store.dialogStack[0].title).toBe('Original Title')
+
+      // Second call with same key should reuse the dialog
+      store.showDialog({
+        key: 'reusable-dialog',
+        component: MockComponent,
+        title: 'New Title' // This should be ignored
+      })
+
+      // Should still have only one dialog with original title
+      expect(store.dialogStack).toHaveLength(1)
+      expect(store.dialogStack[0].key).toBe('reusable-dialog')
+      expect(store.dialogStack[0].title).toBe('Original Title')
+    })
+
+    it('fires the evicted dialog onRemoved, not onClose, when the stack exceeds the cap', () => {
+      const store = useDialogStore()
+      const onClose = vi.fn()
+      const onRemoved = vi.fn()
+
+      // priority: 10 pins this dialog at dialogStack[0], the slot the cap
+      // evicts from
+      store.showDialog({
+        key: 'evicted-dialog',
+        component: MockComponent,
+        priority: 10,
+        dialogComponentProps: { onClose, onRemoved }
+      })
+
+      for (let i = 0; i < 9; i++) {
+        store.showDialog({
+          key: `filler-${i}`,
+          component: MockComponent
+        })
+      }
+
+      expect(store.dialogStack[0].key).toBe('evicted-dialog')
+
+      store.showDialog({
+        key: 'overflow-dialog',
+        component: MockComponent
+      })
+
+      expect(onRemoved).toHaveBeenCalledTimes(1)
+      // Eviction is not a user close — onClose must not fire (it carries
+      // user-intent side effects like telemetry and "don't show again").
+      expect(onClose).not.toHaveBeenCalled()
+      expect(store.isDialogOpen('evicted-dialog')).toBe(false)
+      expect(store.dialogStack).toHaveLength(10)
+    })
+
+    it('keeps the stack capped when evicted onRemoved opens another dialog', () => {
+      const store = useDialogStore()
+      const onRemoved = vi.fn(() => {
+        store.showDialog({
+          key: 'reentrant-dialog',
+          component: MockComponent
+        })
+      })
+
+      store.showDialog({
+        key: 'evicted-dialog',
+        component: MockComponent,
+        priority: 10,
+        dialogComponentProps: { onRemoved }
+      })
+
+      for (let i = 0; i < 9; i++) {
+        store.showDialog({
+          key: `filler-${i}`,
+          component: MockComponent
+        })
+      }
+
+      store.showDialog({
+        key: 'overflow-dialog',
+        component: MockComponent
+      })
+
+      expect(onRemoved).toHaveBeenCalledTimes(1)
+      expect(store.isDialogOpen('evicted-dialog')).toBe(false)
+      expect(store.isDialogOpen('reentrant-dialog')).toBe(true)
+      expect(store.dialogStack).toHaveLength(10)
+    })
+
+    it('leaves a same-key replacement open when onClose evicted the original', () => {
+      const store = useDialogStore()
+      const replacementRemoved = vi.fn()
+      const originalRemoved = vi.fn(() => {
+        store.showDialog({
+          key: 'target',
+          component: MockComponent,
+          dialogComponentProps: { onRemoved: replacementRemoved }
+        })
+      })
+
+      store.showDialog({
+        key: 'target',
+        component: MockComponent,
+        priority: 10,
+        dialogComponentProps: {
+          onRemoved: originalRemoved,
+          // Overflow the cap so closing `target` evicts `target` itself, and
+          // its onRemoved reopens the key before closeDialog looks it up.
+          onClose: () => {
+            for (let i = 0; i < 10; i++) {
+              store.showDialog({ key: `filler-${i}`, component: MockComponent })
+            }
+          }
+        }
+      })
+
+      store.closeDialog({ key: 'target' })
+
+      expect(originalRemoved).toHaveBeenCalledTimes(1)
+      expect(replacementRemoved).not.toHaveBeenCalled()
+      expect(store.isDialogOpen('target')).toBe(true)
+      expect(
+        store.activeKey,
+        'Escape must reach the reopened dialog, not the filler behind it'
+      ).toBe('target')
+    })
+
+    it('evicts the most recently shown dialog when priorities are equal', () => {
+      const store = useDialogStore()
+      const onRemoved = vi.fn()
+
+      for (let i = 0; i < 9; i++) {
+        store.showDialog({
+          key: `filler-${i}`,
+          component: MockComponent
+        })
+      }
+
+      store.showDialog({
+        key: 'front-most-dialog',
+        component: MockComponent,
+        dialogComponentProps: { onRemoved }
+      })
+
+      expect(store.dialogStack[0].key).toBe('front-most-dialog')
+
+      store.showDialog({
+        key: 'overflow-dialog',
+        component: MockComponent
+      })
+
+      expect(onRemoved).toHaveBeenCalledTimes(1)
+      expect(store.isDialogOpen('front-most-dialog')).toBe(false)
+      expect(store.isDialogOpen('overflow-dialog')).toBe(true)
+      expect(store.dialogStack).toHaveLength(10)
+    })
+
+    it('should update existing dialog props by key', () => {
+      const store = useDialogStore()
+
+      store.showDialog({
+        key: 'updatable-dialog',
+        component: MockContentPropsComponent,
+        props: { openingAction: null },
+        dialogComponentProps: { dismissOnPointerDownOutside: true }
+      })
+
+      const updated = store.updateDialog({
+        key: 'updatable-dialog',
+        contentProps: { openingAction: 'copy-and-open' },
+        dialogComponentProps: { dismissOnPointerDownOutside: false }
+      })
+
+      expect(updated).toBe(true)
+      expect(store.dialogStack[0].contentProps).toMatchObject({
+        openingAction: 'copy-and-open'
+      })
+      expect(
+        store.dialogStack[0].dialogComponentProps.dismissOnPointerDownOutside
+      ).toBe(false)
+    })
+  })
+})

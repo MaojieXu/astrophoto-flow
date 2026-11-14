@@ -1,0 +1,158 @@
+import type { LGraphNode } from '@/lib/litegraph/src/LGraphNode'
+import { LLink, replaceLinkTopology } from '@/lib/litegraph/src/LLink'
+import { linkIdReservations, mintLinkId } from '../idAllocation'
+import { anchorRerouteChain } from '@/lib/litegraph/src/Reroute'
+import type { RerouteId } from '@/lib/litegraph/src/Reroute'
+import type { Point, ReadOnlyRect } from '@/lib/litegraph/src/interfaces'
+import type {
+  INodeInputSlot,
+  INodeOutputSlot
+} from '@/lib/litegraph/src/types/slots'
+import { LiteGraph } from '@/lib/litegraph/src/litegraph'
+import { NodeSlotType } from '@/lib/litegraph/src/types/globalEnums'
+
+import type { SubgraphInput } from './SubgraphInput'
+import type { SubgraphOutputNode } from './SubgraphOutputNode'
+import { SubgraphSlot } from './SubgraphSlotBase'
+import { isNodeSlot, isSubgraphInput } from './subgraphUtils'
+
+/**
+ * An output "slot" from a subgraph to a parent graph.
+ *
+ * IMPORTANT: A subgraph "output" is both an output AND an input.  It creates an extra link connection point between
+ * a parent graph and a subgraph, so is conceptually similar to a reroute.
+ *
+ * This can be a little confusing, but is easier to visualise when imagining editing a subgraph.
+ * You have "Subgraph Outputs", because they go from inside the subgraph and out, but links to them come from "node outputs".
+ *
+ * Functionally, however, when editing a subgraph, that "subgraph output" is the "target" or "input side" of a link.
+ */
+export class SubgraphOutput extends SubgraphSlot {
+  declare parent: SubgraphOutputNode
+
+  override connect(
+    slot: INodeOutputSlot,
+    node: LGraphNode,
+    afterRerouteId?: RerouteId
+  ): LLink | undefined {
+    const { subgraph } = this.parent
+
+    // Validate type compatibility
+    if (!LiteGraph.isValidConnection(slot.type, this.type)) return
+
+    // Allow nodes to block connection
+    const outputIndex = node.outputs.indexOf(slot)
+    if (outputIndex === -1)
+      throw new Error('Slot is not an output of the given node')
+
+    if (
+      node.onConnectOutput?.(outputIndex, this.type, this, this.parent, -1) ===
+      false
+    )
+      return
+
+    // Link should not be present, but just in case, disconnect it
+    const existingLink = this.getLinks().at(0)
+    if (existingLink != null) {
+      subgraph.beforeChange()
+    }
+
+    const linkId = mintLinkId(
+      subgraph.state,
+      linkIdReservations(subgraph.rootGraph)
+    )
+
+    const link = new LLink(
+      linkId,
+      slot.type,
+      node.id,
+      outputIndex,
+      this.parent.id,
+      this.parent.slots.indexOf(this),
+      afterRerouteId
+    )
+
+    if (!replaceLinkTopology(subgraph, existingLink, link)) {
+      if (existingLink) subgraph.afterChange()
+      return
+    }
+
+    existingLink?.disconnect(subgraph, 'input')
+
+    // Set link ID in each slot
+    this.linkIds[0] = link.id
+
+    anchorRerouteChain(subgraph, link)
+    subgraph.incrementVersion()
+
+    node.onConnectionsChange?.(
+      NodeSlotType.OUTPUT,
+      outputIndex,
+      true,
+      link,
+      slot
+    )
+    if (subgraph.getLink(link.id) !== link) {
+      subgraph.afterChange()
+      return
+    }
+
+    subgraph.afterChange()
+
+    return link
+  }
+
+  get labelPos(): Point {
+    const [x, y, , height] = this.boundingRect
+    return [x + height, y + height * 0.5]
+  }
+
+  override arrange(rect: ReadOnlyRect): void {
+    const [left, top, width, height] = rect
+    const { boundingRect: b, pos } = this
+
+    b[0] = left
+    b[1] = top
+    b[2] = width
+    b[3] = height
+
+    pos[0] = left + height * 0.5
+    pos[1] = top + height * 0.5
+  }
+
+  /**
+   * Checks if this slot is a valid target for a connection from the given slot.
+   * For SubgraphOutput (which acts as an input inside the subgraph),
+   * the fromSlot should be an output slot.
+   */
+  override isValidTarget(
+    fromSlot: INodeInputSlot | INodeOutputSlot | SubgraphInput | SubgraphOutput
+  ): boolean {
+    if (isNodeSlot(fromSlot) && 'links' in fromSlot) {
+      return LiteGraph.isValidConnection(fromSlot.type, this.type)
+    }
+
+    if (isSubgraphInput(fromSlot)) {
+      return LiteGraph.isValidConnection(fromSlot.type, this.type)
+    }
+
+    return false
+  }
+  override disconnect() {
+    const { subgraph } = this.parent
+    //should never have more than one connection
+    for (const linkId of this.linkIds) {
+      const link = subgraph.links[linkId]
+      subgraph.removeLink(linkId)
+      const { outputNode } = link.resolve(subgraph)
+      outputNode?.onConnectionsChange?.(
+        NodeSlotType.OUTPUT,
+        link.origin_slot,
+        false,
+        link,
+        this
+      )
+    }
+    this.linkIds.length = 0
+  }
+}

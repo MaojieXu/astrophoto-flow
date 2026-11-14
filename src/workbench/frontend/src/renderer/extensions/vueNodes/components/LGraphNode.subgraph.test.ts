@@ -1,0 +1,164 @@
+/**
+ * Tests for NodeHeader subgraph functionality
+ */
+import { render, screen, fireEvent } from '@testing-library/vue'
+import type { Pinia } from 'pinia'
+import { getActivePinia } from 'pinia'
+import { describe, expect, it, vi } from 'vitest'
+import { createI18n } from 'vue-i18n'
+
+import { toNodeId } from '@/types/nodeId'
+import { nextTick } from 'vue'
+
+import { LGraph } from '@/lib/litegraph/src/litegraph'
+import type {
+  LGraphNode as LGLGraphNode,
+  SubgraphNode
+} from '@/lib/litegraph/src/litegraph'
+import type { NodeState } from '@/types/nodeState'
+import LGraphNode from '@/renderer/extensions/vueNodes/components/LGraphNode.vue'
+import { useCanvasStore } from '@/renderer/core/canvas/canvasStore'
+import { getNodeByLocatorId } from '@/utils/graphTraversalUtil'
+
+const SUBGRAPH_ID = '00000000-0000-4000-8000-000000000002'
+const mockApp: {
+  rootGraph?: Partial<LGraph>
+  nodeOutputs: Record<string, never>
+  nodePreviewImages: Record<string, never>
+} = vi.hoisted(() => ({ nodeOutputs: {}, nodePreviewImages: {} }))
+// Mock dependencies
+vi.mock<unknown>(import('@/scripts/app'), () => ({
+  app: mockApp
+}))
+
+vi.mock(import('@/utils/graphTraversalUtil'), { spy: true })
+
+vi.mock(import('@/composables/useErrorHandling'))
+
+vi.mock<unknown>(import('@/i18n'), () => ({
+  st: vi.fn((key) => key),
+  t: vi.fn((key) => key),
+  i18n: {
+    global: {
+      t: vi.fn((key) => key)
+    }
+  }
+}))
+
+const i18n = createI18n({
+  legacy: false,
+  locale: 'en',
+  messages: { en: {} },
+  missingWarn: false,
+  fallbackWarn: false
+})
+
+describe('Vue Node - Subgraph Functionality', () => {
+  let rootGraph: LGraph
+  let pinia: Pinia
+
+  // Helper to setup common mocks
+  const setupMocks = async (isSubgraph = true, hasGraph = true) => {
+    if (hasGraph) mockApp.rootGraph = rootGraph
+    else mockApp.rootGraph = undefined
+
+    vi.mocked(getNodeByLocatorId).mockReturnValue({
+      isSubgraphNode: (): this is SubgraphNode => isSubgraph
+    } as LGLGraphNode)
+  }
+
+  beforeEach(() => {
+    pinia = getActivePinia()!
+    rootGraph = new LGraph()
+  })
+
+  const createMockNodeData = (id: string, subgraphId?: string): NodeState => ({
+    id: toNodeId(id),
+    graphId: subgraphId ?? rootGraph.id,
+    title: 'Test Node',
+    type: 'TestNode',
+    mode: 0,
+    flags: {},
+    inputs: [],
+    outputs: [],
+    properties: {}
+  })
+
+  const renderComponent = (props: { nodeData: NodeState }) => {
+    useCanvasStore().currentGraph = rootGraph
+    return render(LGraphNode, {
+      props,
+      global: {
+        plugins: [pinia, i18n],
+        mocks: {
+          $primevue: { config: {} }
+        }
+      }
+    })
+  }
+
+  it('should show subgraph button for subgraph nodes', async () => {
+    await setupMocks(true) // isSubgraph = true
+
+    renderComponent({
+      nodeData: createMockNodeData('test-node-1')
+    })
+
+    await nextTick()
+
+    expect(screen.getByTestId('subgraph-enter-button')).toBeInTheDocument()
+  })
+
+  it('should not show subgraph button for regular nodes', async () => {
+    await setupMocks(false) // isSubgraph = false
+
+    renderComponent({
+      nodeData: createMockNodeData('test-node-1')
+    })
+
+    await nextTick()
+
+    expect(
+      screen.queryByTestId('subgraph-enter-button')
+    ).not.toBeInTheDocument()
+  })
+
+  it('should handle subgraph context correctly', async () => {
+    await setupMocks(true) // isSubgraph = true
+
+    renderComponent({
+      nodeData: createMockNodeData('test-node-1', SUBGRAPH_ID)
+    })
+
+    await nextTick()
+
+    // Should call getNodeByLocatorId with correct locator ID
+    expect(getNodeByLocatorId).toHaveBeenCalledWith(
+      expect.anything(),
+      `${SUBGRAPH_ID}:test-node-1`
+    )
+
+    expect(screen.getByTestId('subgraph-enter-button')).toBeInTheDocument()
+  })
+
+  it('should prevent click event propagation on subgraph button', async () => {
+    await setupMocks(true) // isSubgraph = true
+
+    const { container } = renderComponent({
+      nodeData: createMockNodeData('test-node-1')
+    })
+
+    await nextTick()
+
+    const parentListener = vi.fn()
+    // oxlint-disable-next-line testing-library/no-container
+    container.addEventListener('click', parentListener)
+
+    const subgraphButton = screen.getByTestId('subgraph-enter-button')
+
+    // oxlint-disable-next-line testing-library/prefer-user-event
+    await fireEvent.click(subgraphButton)
+
+    expect(parentListener).not.toHaveBeenCalled()
+  })
+})

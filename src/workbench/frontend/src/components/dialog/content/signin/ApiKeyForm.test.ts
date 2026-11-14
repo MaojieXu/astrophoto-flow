@@ -1,0 +1,95 @@
+import userEvent from '@testing-library/user-event'
+import { render, screen } from '@testing-library/vue'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { createI18n } from 'vue-i18n'
+
+import { getComfyPlatformBaseUrl } from '@/config/comfyApi'
+import { useAuthStore } from '@/stores/authStore'
+
+import ApiKeyForm from './ApiKeyForm.vue'
+vi.mock(import('firebase/auth'))
+
+const i18n = createI18n({
+  legacy: false,
+  locale: 'en',
+  messages: {
+    en: {
+      auth: {
+        apiKey: {
+          title: 'API Key',
+          label: 'API Key',
+          placeholder: 'Enter your API Key',
+          error: 'Invalid API Key',
+          helpText: 'Need an API key?',
+          generateKey: 'Get one here',
+          whitelistInfo: 'About non-whitelisted sites',
+          description: 'Use your Comfy API key to enable API Nodes'
+        }
+      },
+      g: {
+        back: 'Back',
+        save: 'Save',
+        learnMore: 'Learn more'
+      }
+    }
+  }
+})
+
+describe('ApiKeyForm', () => {
+  beforeEach(() => {
+    useAuthStore().loading = false
+  })
+
+  function renderComponent(props: Record<string, unknown> = {}) {
+    const user = userEvent.setup()
+    const result = render(ApiKeyForm, {
+      global: { plugins: [i18n] },
+      props
+    })
+    return { ...result, user }
+  }
+
+  it('renders correctly with all required elements', () => {
+    renderComponent()
+
+    expect(screen.getByRole('heading', { name: 'API Key' })).toBeInTheDocument()
+    expect(screen.getByLabelText('API Key')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Save' })).toBeInTheDocument()
+  })
+
+  it('emits back event when back button is clicked', async () => {
+    const onBack = vi.fn()
+    const { user } = renderComponent({ onBack })
+
+    await user.click(screen.getByRole('button', { name: 'Back' }))
+
+    expect(onBack).toHaveBeenCalled()
+  })
+
+  it('shows loading state when submitting', () => {
+    useAuthStore().loading = true
+    const { container } = renderComponent()
+
+    // oxlint-disable-next-line testing-library/no-container, testing-library/no-node-access
+    const submitButton = container.querySelector('button[type="submit"]')
+    expect(submitButton).toBeDisabled()
+  })
+
+  it('displays help text and links correctly', () => {
+    renderComponent()
+
+    expect(
+      screen.getByText('Need an API key?', { exact: false })
+    ).toBeInTheDocument()
+    expect(screen.getByRole('link', { name: 'Get one here' })).toHaveAttribute(
+      'href',
+      `${getComfyPlatformBaseUrl()}/login`
+    )
+    expect(
+      screen.getByRole('link', { name: 'About non-whitelisted sites' })
+    ).toHaveAttribute(
+      'href',
+      'https://docs.comfy.org/tutorials/partner-nodes/overview#log-in-with-comfyui-account-api-key-on-non-whitelisted-websites'
+    )
+  })
+})

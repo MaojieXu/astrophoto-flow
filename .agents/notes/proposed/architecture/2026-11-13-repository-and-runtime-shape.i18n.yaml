@@ -1,0 +1,25 @@
+# Bilingual-pair consistency record for .agents/notes/proposed/architecture/2026-11-13-repository-and-runtime-shape.md ↔ .agents/notes/proposed/architecture/2026-11-13-repository-and-runtime-shape.zh.md: per heading
+# section, a hash of its English and Chinese blocks outside code blocks and generated regions.
+# After editing either side, bring the other along and re-record with:
+#   pnpm run verify-translation-pairing --write .agents/notes/proposed/architecture/2026-11-13-repository-and-runtime-shape.md
+/agent-note-one-repository-one-runtime-environment:
+  en: d4db06c44f1c661d
+  zh: 0554a6fa38d9d822
+/agent-note-one-repository-one-runtime-environment/problem:
+  en: 807ed4dcb0d65569
+  zh: acead69d8aeded9b
+/agent-note-one-repository-one-runtime-environment/proposal:
+  en: 2c3d6be117dea6d8
+  zh: 1dadad5d7cc542dd
+/agent-note-one-repository-one-runtime-environment/data-ownership:
+  en: d9147ebe73659850
+  zh: 267312af7bc53a9f
+/agent-note-one-repository-one-runtime-environment/alternatives-considered:
+  en: 4879fae313937b26
+  zh: 34db99c34894f5c0
+/agent-note-one-repository-one-runtime-environment/acceptance-criteria:
+  en: 65fa7259d854d0c9
+  zh: 58ea85ff89c09b2b
+/agent-note-one-repository-one-runtime-environment/risks:
+  en: 9fe48c4832846b11
+  zh: c93fe5834c74053e
