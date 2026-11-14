@@ -1,0 +1,34 @@
+{
+  "name": "astrophotoflow",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "packageManager": "pnpm@11.28.5",
+  "engines": {
+    "node": ">=24.9.0"
+  },
+  "scripts": {
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit",
+    "verify-agent-note-classification": "tsx scripts/verify-agent-note-classification.ts",
+    "verify-agent-note-format": "tsx scripts/verify-agent-note-format.ts",
+    "verify-archived-agent-notes": "tsx scripts/verify-archived-agent-notes.ts",
+    "verify-doc-budgets": "tsx scripts/verify-doc-budgets.ts",
+    "verify-translation-pairing": "tsx scripts/verify-translation-pairing.ts",
+    "translate": "tsx scripts/translate.ts",
+    "verify-translation-prompt": "tsx scripts/verify-translation-prompt.ts",
+    "gen-translation-brief": "tsx scripts/gen-translation-brief.ts",
+    "check": "tsx scripts/run-gates.ts quick",
+    "check:full": "tsx scripts/run-gates.ts full"
+  },
+  "devDependencies": {
+    "@types/mdast": "^4.0.4",
+    "@types/node": "^24.10.1",
+    "mdast-util-from-markdown": "^2.0.3",
+    "mdast-util-gfm": "^3.1.0",
+    "micromark-extension-gfm": "^3.0.0",
+    "tsx": "^4.23.13",
+    "typescript": "^6.0.3",
+    "vitest": "^4.1.11"
+  }
+}

@@ -1,0 +1,16 @@
+# Bilingual-pair consistency record for docs/i18n/pipeline.md ↔ docs/i18n/pipeline.zh.md: per heading
+# section, a hash of its English and Chinese blocks outside code blocks and generated regions.
+# After editing either side, bring the other along and re-record with:
+#   pnpm run verify-translation-pairing --write docs/i18n/pipeline.md
+/script-driven-translation:
+  en: e60266777b5ec0b5
+  zh: 4e66e4b28f0687df
+/script-driven-translation/commands:
+  en: 67a51d5b76a95dba
+  zh: c404c997045b7cbd
+/script-driven-translation/what-the-machine-path-does-not-decide:
+  en: b38eb1a0f513d7ed
+  zh: ab1bf58d84e284e8
+/script-driven-translation/credentials:
+  en: 4289b7099276532b
+  zh: 4a18f6eb1987283f

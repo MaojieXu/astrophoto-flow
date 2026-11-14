@@ -1,0 +1,9 @@
+{
+  "excluded": [
+    ".agents/notes/AGENTS.md",
+    ".agents/notes/implemented/AGENTS.md",
+    "docs/AGENTS.md",
+    "docs/i18n/terminology.md",
+    "docs/i18n/translation-prompt.md"
+  ]
+}

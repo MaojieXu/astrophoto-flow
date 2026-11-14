@@ -1,0 +1,21 @@
+{
+  // Repository gates live in scripts/ and are executed by tsx; `tsc --noEmit`
+  // type-checks the same files. Scripts import each other with explicit `.ts`
+  // specifiers, which tsx resolves and `allowImportingTsExtensions` accepts
+  // because nothing is emitted.
+  "compilerOptions": {
+    "target": "ES2024",
+    "lib": ["ES2024", "ESNext.Disposable"],
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "types": ["node"],
+    "strict": true,
+    "noUncheckedIndexedAccess": true,
+    "verbatimModuleSyntax": true,
+    "allowImportingTsExtensions": true,
+    "noEmit": true,
+    "skipLibCheck": true,
+    "forceConsistentCasingInFileNames": true
+  },
+  "include": ["scripts/**/*.ts"]
+}

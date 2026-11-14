@@ -1,0 +1,23 @@
+<translation>
+# 快照说明
+
+工作台一次只服务一个工作区。
+
+- 图像保持原位
+- 结果按显式操作保存
+</translation>
+
+<review>
+- [Sentence] 第 1 句补「只」以还原 one at a time 的限定
+</review>
+
+<final>
+# 快照说明
+
+[English](snapshot-note.md) | 中文
+
+工作台一次只服务一个工作区。
+
+- 图像保持原位
+- 结果按显式操作保存
+</final>

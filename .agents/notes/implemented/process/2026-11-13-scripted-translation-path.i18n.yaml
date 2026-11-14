@@ -1,0 +1,19 @@
+# Bilingual-pair consistency record for .agents/notes/implemented/process/2026-11-13-scripted-translation-path.md ↔ .agents/notes/implemented/process/2026-11-13-scripted-translation-path.zh.md: per heading
+# section, a hash of its English and Chinese blocks outside code blocks and generated regions.
+# After editing either side, bring the other along and re-record with:
+#   pnpm run verify-translation-pairing --write .agents/notes/implemented/process/2026-11-13-scripted-translation-path.md
+/agent-note-a-scripted-translation-path-beside-the-manual-pass:
+  en: 5125da3a66a57467
+  zh: 20d275f6c060f025
+/agent-note-a-scripted-translation-path-beside-the-manual-pass/problem:
+  en: a8aaf3b802ff94e0
+  zh: 06f3fc3c2eb4c16b
+/agent-note-a-scripted-translation-path-beside-the-manual-pass/decision:
+  en: d94a9508e6fa7d11
+  zh: c6722024acf6da20
+/agent-note-a-scripted-translation-path-beside-the-manual-pass/alternatives-considered:
+  en: 92168d1e5b6193c3
+  zh: 379929a82b279cc5
+/agent-note-a-scripted-translation-path-beside-the-manual-pass/consequences:
+  en: 3c3b90603d112546
+  zh: f4fbe4ed9fb33539

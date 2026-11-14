@@ -1,0 +1,13 @@
+# Bilingual-pair consistency record for README.md ↔ README.zh.md: per heading
+# section, a hash of its English and Chinese blocks outside code blocks and generated regions.
+# After editing either side, bring the other along and re-record with:
+#   pnpm run verify-translation-pairing --write README.md
+/astrophotoflow:
+  en: c211128fc51fe951
+  zh: 7a7827f16ae56bd0
+/astrophotoflow/what-is-here:
+  en: ab6b75021c3c5b79
+  zh: d47911c7d79cd3ae
+/astrophotoflow/checks:
+  en: 13149c6bed2bb80c
+  zh: 1bceaec14e2d969b

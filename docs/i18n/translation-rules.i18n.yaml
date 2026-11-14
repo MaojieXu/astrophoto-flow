@@ -1,0 +1,28 @@
+# Bilingual-pair consistency record for docs/i18n/translation-rules.md ↔ docs/i18n/translation-rules.zh.md: per heading
+# section, a hash of its English and Chinese blocks outside code blocks and generated regions.
+# After editing either side, bring the other along and re-record with:
+#   pnpm run verify-translation-pairing --write docs/i18n/translation-rules.md
+/translation-rules:
+  en: d6eff377fa51184d
+  zh: c7a50f5314856146
+/translation-rules/faithfulness:
+  en: 8ce28f619f598d6e
+  zh: e0123fafe9910055
+/translation-rules/voice:
+  en: 340add1669144ae9
+  zh: 4442d9de6bd6df70
+/translation-rules/structure-preservation:
+  en: 2a0dee1d12589b4f
+  zh: 66e2b6e05e440570
+/translation-rules/terminology:
+  en: 017969fdf808cab6
+  zh: 5eb191d9bc539ddf
+/translation-rules/typography:
+  en: f2afdf1c9472644d
+  zh: aa299f8431794bf0
+/translation-rules/quality-bar:
+  en: dd31907d87de3c9f
+  zh: d8f51c6385be498b
+/translation-rules/references:
+  en: 31d651937c72a2c5
+  zh: 1eccd995ff4234d1
