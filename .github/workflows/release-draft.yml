@@ -1,0 +1,61 @@
+name: Build Windows release draft
+on:
+  push:
+    tags: ['v*']
+permissions:
+  contents: read
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+jobs:
+  build:
+    runs-on: windows-2025
+    timeout-minutes: 60
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+      - name: Require a release commit from main
+        shell: pwsh
+        run: |
+          git merge-base --is-ancestor HEAD origin/main
+          if ($LASTEXITCODE -ne 0) { throw 'Release tag must name a commit on main.' }
+      - uses: actions/setup-node@v6
+        with:
+          node-version-file: .node-version
+      - name: Prepare the declared tooling
+        shell: pwsh
+        run: |
+          npm install --global pnpm@11.28.5
+          $runtime = Get-Content scripts/release/runtime.json -Raw | ConvertFrom-Json
+          $env:UV_UNMANAGED_INSTALL = Join-Path $env:RUNNER_TEMP 'uv'
+          Invoke-RestMethod ("https://astral.sh/uv/" + $runtime.uv.version + '/install.ps1') | Invoke-Expression
+          $env:UV_UNMANAGED_INSTALL | Out-File -FilePath $env:GITHUB_PATH -Append
+          & (Join-Path $env:UV_UNMANAGED_INSTALL 'uv.exe') python install $runtime.python --no-bin --no-registry
+          $python = & (Join-Path $env:UV_UNMANAGED_INSTALL 'uv.exe') python find $runtime.python
+          (Split-Path $python) | Out-File -FilePath $env:GITHUB_PATH -Append
+      - name: Build versioned assets
+        shell: pwsh
+        run: ./scripts/release/build.ps1 -Tag '${{ github.ref_name }}'
+      - name: Verify a clean Windows installation
+        shell: pwsh
+        run: ./scripts/release/verify.ps1
+      - name: Create a draft from the verified assets
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          $options = @('release', 'create', $env:RELEASE_TAG, '--draft', '--target', $env:GITHUB_SHA, '--title', $env:RELEASE_TAG, '--generate-notes')
+          if ($env:RELEASE_TAG.Contains('-dev.')) { $options += '--prerelease' }
+          $options += @(Get-ChildItem .artifacts/dist -File | ForEach-Object FullName)
+          & gh @options
+          if ($LASTEXITCODE -ne 0) { throw 'Draft creation failed; existing assets were not overwritten.' }
+      - uses: actions/upload-artifact@v6
+        if: always()
+        with:
+          name: windows-release-report
+          path: .artifacts/dist/verification.json
+          if-no-files-found: ignore

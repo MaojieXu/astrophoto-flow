@@ -6,20 +6,20 @@
   en: 87e6a43f2d4d119e
   zh: 61518247f0e90f40
 /agent-note-one-config-file-one-workspace-explicit-restart/problem:
-  en: 9e37dafc43d55d63
-  zh: d824b299d06060f4
+  en: aefbae59e90c1bde
+  zh: f4f1be333ceef976
 /agent-note-one-config-file-one-workspace-explicit-restart/proposal:
-  en: 58e7f671454a3d89
-  zh: e717c06e8400bebe
+  en: ce464a17c5392bee
+  zh: 8b05d4e9566ff42a
 /agent-note-one-config-file-one-workspace-explicit-restart/proposal/location-and-schema:
-  en: b899b9ef8cabcd0a
-  zh: dea992f38db83cba
+  en: 9edbf04a25efe7ed
+  zh: 8932f35d216785f2
 /agent-note-one-config-file-one-workspace-explicit-restart/proposal/processes-and-ports:
-  en: b49de41bbb4bebcc
-  zh: 00a5481e28158c7a
+  en: b812fac66f0c0053
+  zh: dca16d3d04b504cb
 /agent-note-one-config-file-one-workspace-explicit-restart/proposal/lifecycle:
-  en: a2feaad260d5f192
-  zh: 62b637d4542a55c0
+  en: 2a6c413fd3f905c8
+  zh: 4ac4433bf140d217
 /agent-note-one-config-file-one-workspace-explicit-restart/proposal/settings-and-save-semantics:
   en: bf040d81a9d7b6e9
   zh: 15ac4618ab0d72b8
@@ -30,8 +30,8 @@
   en: 7303ace52666fb0f
   zh: dbbb9872fbe57f63
 /agent-note-one-config-file-one-workspace-explicit-restart/acceptance-criteria:
-  en: 18ae393a375bbbf7
-  zh: de566082da05fd6e
+  en: af70f6e1cf28688d
+  zh: 381025b13d806f5a
 /agent-note-one-config-file-one-workspace-explicit-restart/risks:
   en: 27fc1dfca361c247
   zh: 408bd603fc89a8aa

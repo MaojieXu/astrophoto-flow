@@ -1,0 +1,22 @@
+# Bilingual-pair consistency record for .agents/notes/implemented/process/2026-11-14-windows-agent-installation-and-delivery.md ↔ .agents/notes/implemented/process/2026-11-14-windows-agent-installation-and-delivery.zh.md: per heading
+# section, a hash of its English and Chinese blocks outside code blocks and generated regions.
+# After editing either side, bring the other along and re-record with:
+#   pnpm run verify-translation-pairing --write .agents/notes/implemented/process/2026-11-14-windows-agent-installation-and-delivery.md
+/agent-note-windows-agent-installation-and-reviewed-delivery:
+  en: dfca361d87842ae9
+  zh: fc00d8013e5efc5e
+/agent-note-windows-agent-installation-and-reviewed-delivery/problem:
+  en: 6abef9bf4bee7c88
+  zh: 7744c7433e497519
+/agent-note-windows-agent-installation-and-reviewed-delivery/decision:
+  en: 87579242e6013332
+  zh: 6d283282cd4a14ed
+/agent-note-windows-agent-installation-and-reviewed-delivery/alternatives-considered:
+  en: 3c8285392564a344
+  zh: c8efa6d0d1fcf790
+/agent-note-windows-agent-installation-and-reviewed-delivery/consequences:
+  en: 5062b6186ab44817
+  zh: b8a446d5eb2fabc3
+/agent-note-windows-agent-installation-and-reviewed-delivery/related:
+  en: 93c2bb9efda54039
+  zh: d158684bb72790fb

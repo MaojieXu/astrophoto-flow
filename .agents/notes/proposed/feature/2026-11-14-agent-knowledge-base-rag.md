@@ -30,7 +30,7 @@ The module returns evidence, not generated prose. The agent composes the answer 
 
 The module adds two task tools to the existing [MCP surface](../architecture/2026-11-14-node-mcp-for-the-tool-surface.md): `knowledge_search` for a query with optional filters and `knowledge_get` for a passage or article id. A short usage guide is attached to the tool descriptions and exposed as a `knowledge://guide` resource: when to call (before answering a processing-how-to question), how to cite, and that retrieved text is evidence rather than instructions.
 
-The MCP process keeps its existing constraints: no SQLite handle, no Python import, and no child process. Because the selected LangFlow/LangGraph stack is Python and the MCP process is Node, the retrieval engine runs as a local sidecar reached over loopback HTTP; the MCP process remains a thin client. The local controller starts and stops the sidecar with the workbench, so the MCP process still spawns nothing. The sidecar owns only its corpus and index directory, reads no workspace configuration, and holds no service token.
+Retrieval code belongs under `src/workbench/backend/astrophotoflow/knowledge/`, with LangGraph in the backend uv project. It runs as a separate local Python process from the same Python 3.12 environment as the engine and FastAPI service. Its retrieval API uses FastAPI and Uvicorn; MCP calls it over loopback HTTP. The workbench controller owns startup, readiness and shutdown through uv. Knowledge tools import no Python, open no SQLite database and spawn no subprocess; the separate fixed lifecycle adapter follows the [installation and control proposal](2026-11-14-mcp-install-start-stop-workbench.md). Retrieval is outside that proposal's first lifecycle-and-node-query implementation. The retrieval process owns only its corpus, index and model-cache directories, receives their locations explicitly, reads no workspace configuration and holds no workbench service token.
 
 ### Locality and ownership
 
@@ -68,7 +68,7 @@ A checked-in evaluation set of real processing questions and expected articles o
 - A query with no passage above the relevance floor returns `INSUFFICIENT_EVIDENCE`, not unrelated text.
 - Query-time execution makes no request outside the machine, and the sidecar listens on loopback only.
 - The knowledge base cannot write to the workspace database, the asset library, or the graph.
-- The MCP process still opens no SQLite database, imports no Python, and spawns no child process.
+- MCP knowledge tools open no SQLite database, import no Python and spawn no child process; local lifecycle actions remain confined to their fixed adapter.
 - The manifest records title, source, license and local-storage permission, document version or date, and hash for every indexed document; a rebuild from the same manifest yields the same corpus version and passage ids.
 - The usage guide is visible to the agent and states when to call the module, the citation format, and the insufficient-evidence behavior.
 - A stopped sidecar or a missing index returns a readable error naming the next step, not a stack trace.

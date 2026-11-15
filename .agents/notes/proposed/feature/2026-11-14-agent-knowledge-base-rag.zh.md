@@ -30,7 +30,7 @@ agent（智能体）在协助天文摄影处理时，只能依靠模型记忆作
 
 该模块在现有 [MCP 表面](../architecture/2026-11-14-node-mcp-for-the-tool-surface.zh.md) 上增加两个任务工具：`knowledge_search` 接受查询和可选过滤器，`knowledge_get` 按段落或文章 id 取回内容。简短的使用说明附在工具描述中，并作为 `knowledge://guide` 资源暴露：何时调用（在回答任何处理操作问题之前）、如何引用，以及检索文本是证据而非指令。
 
-MCP 进程保持现有约束：没有 SQLite 句柄、不导入 Python、不启动子进程。由于选定的 LangFlow/LangGraph 技术栈是 Python，而 MCP 进程是 Node，检索引擎作为本地 sidecar（边车进程）运行，通过回环 HTTP 访问；MCP 进程仍是薄客户端。本地控制器随工作台一起启动和停止 sidecar，因此 MCP 进程仍然不启动任何子进程。sidecar 只拥有自己的语料与索引目录，不读取工作区配置，也不持有服务令牌。
+检索代码归 `src/workbench/backend/astrophotoflow/knowledge/`，LangGraph 在后端 uv 项目中声明。它作为独立本地 Python 进程运行，与引擎和 FastAPI 服务共用 Python 3.12 环境。检索 API 使用 FastAPI 和 Uvicorn；MCP 通过回环 HTTP 调用。工作台控制器通过 uv 负责启动、就绪与停止。知识工具不导入 Python、不打开 SQLite 数据库，也不创建子进程；独立的固定生命周期适配器遵循[安装与控制提案](2026-11-14-mcp-install-start-stop-workbench.zh.md)。检索不属于该提案首期生命周期与节点查询实现。检索进程只拥有语料、索引和模型缓存目录，显式接收其位置，不读取工作区配置，也不持有工作台服务令牌。
 
 ### 本地性与归属
 
@@ -68,7 +68,7 @@ LangGraph 用代码定义检索图；LangFlow 可以绘制或查看同一张图�
 - 没有段落达到相关性下限的查询返回 `INSUFFICIENT_EVIDENCE`，而不是不相关文本。
 - 查询时不向机器外发起请求，sidecar 只监听回环地址。
 - 知识库不能写入工作区数据库、素材库或图。
-- MCP 进程仍然不打开 SQLite 数据库、不导入 Python、不启动子进程。
+- MCP 知识工具不打开 SQLite 数据库、不导入 Python、不启动子进程；本机生命周期动作仍限于固定适配器。
 - manifest 为每个已索引文档记录标题、来源、许可与本地存储权限、文档版本或日期和哈希；用同一 manifest 重新构建，产生相同的语料版本与段落 id。
 - agent 能看到使用说明，其中写明何时调用模块、引用格式，以及证据不足时的行为。
 - sidecar 停止或索引缺失时返回可读错误并指出下一步，而不是堆栈。

@@ -6,32 +6,32 @@
   en: 173a1cfad2bcbd6a
   zh: 13cf39565dcfa8f1
 /agent-note-the-mcp-surface-is-a-task-client-not-a-second-backend/problem:
-  en: 0b420980f40fd14b
-  zh: 8bd4112fd177823f
+  en: 5d5ccbe076e9d2cc
+  zh: c46fe4843135dcd1
 /agent-note-the-mcp-surface-is-a-task-client-not-a-second-backend/proposal:
-  en: 53986c38829998cd
-  zh: c9146a1087348949
+  en: 46b9c9b7ed9cacb8
+  zh: 7f89b805d58f079f
 /agent-note-the-mcp-surface-is-a-task-client-not-a-second-backend/proposal/runtime-and-transport:
-  en: 4a6b54c6bc9accaa
-  zh: 2cecdb438a842d4c
+  en: fd1b31bba30fa3ad
+  zh: 765889101dd0792c
 /agent-note-the-mcp-surface-is-a-task-client-not-a-second-backend/proposal/tools:
-  en: 781e41fd72d476f3
-  zh: 00f05fb8e305ba96
+  en: 525e05d16911e0f0
+  zh: 40313cbc9ce35c8c
 /agent-note-the-mcp-surface-is-a-task-client-not-a-second-backend/proposal/contract-and-errors:
-  en: 8bc1c52ede0c9ef8
-  zh: 7f192bf6e2e82963
+  en: 24bb928dee25e282
+  zh: 2692436da932c1cd
 /agent-note-the-mcp-surface-is-a-task-client-not-a-second-backend/proposal/what-stays-local:
-  en: 506f1fafb0bc09e3
-  zh: 1cdd6ecbdf5f1c65
+  en: 1eacfaffee2c635c
+  zh: 3a0ecf6be24e471a
 /agent-note-the-mcp-surface-is-a-task-client-not-a-second-backend/proposal/cli:
   en: 4ebfbbdee1311b9c
   zh: 4b23330d232ab46f
 /agent-note-the-mcp-surface-is-a-task-client-not-a-second-backend/alternatives-considered:
-  en: c7fdfd49766590c6
-  zh: a66b5113ea9595f0
+  en: 4ce20989bd9b1fec
+  zh: 4338e3d937b7dc2a
 /agent-note-the-mcp-surface-is-a-task-client-not-a-second-backend/acceptance-criteria:
-  en: 59a831dc8e5e5f3a
-  zh: 3a1e0263cba0823d
+  en: 275c91e9063214d6
+  zh: 4203fee0528454c5
 /agent-note-the-mcp-surface-is-a-task-client-not-a-second-backend/risks:
   en: d788e736a0362817
   zh: a89a310b51589aba

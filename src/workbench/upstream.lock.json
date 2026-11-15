@@ -20,7 +20,8 @@
         "model management: removed app/model_manager.py and app/subgraph_manager.py; folder_paths now registers only custom_nodes",
         "execution/runtime: removed model patcher, latent preview and prefetch hooks; kept image execution and cache",
         "dependencies: pyproject.toml declares the engine runtime, uv.lock pins CPU torch; removed torchvision, transformers, tokenizers, sentencepiece, spandrel, torchsde, filelock and blake3",
-        "tests: removed model/runtime node tests and rewrote the EXR preview integration test around the retained /view API"
+        "tests: removed model/runtime node tests and rewrote the EXR preview integration test around the retained /view API",
+        "environment: restrict Python to 3.12 and declare FastAPI, Uvicorn, HTTPX, SQLAlchemy, Alembic, Astropy and LangGraph in the shared uv project; engine database modules remain removed"
       ]
     },
     {
@@ -40,7 +41,8 @@
         "templates: removed sidebar, menu, command, first-run, linear-mode and empty-workflow template entry points because bundled templates require deleted nodes",
         "execution UI: restored output-history refresh after status and execution_success",
         "api: removed getGlobalSubgraphs/getGlobalSubgraphData and model-library calls",
-        "tests: updated sidebar, graph-view, subgraph and module-boundary specs for the retained surface"
+        "tests: updated sidebar, graph-view, subgraph and module-boundary specs for the retained surface",
+        "environment: align pnpm 11.28.5 and Node 26 types; add a private astrophotoflow-ui dependency package with Vue Query, Zod and OpenAPI generation tools"
       ]
     }
   ]

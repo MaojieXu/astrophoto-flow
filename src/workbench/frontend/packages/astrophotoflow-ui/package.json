@@ -1,0 +1,22 @@
+{
+  "name": "@astrophotoflow/ui",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "license": "GPL-3.0-only",
+  "dependencies": {
+    "@tanstack/vue-query": "5.107.1",
+    "zod": "catalog:"
+  },
+  "peerDependencies": {
+    "vue": "^3.5.42"
+  },
+  "devDependencies": {
+    "@hey-api/openapi-ts": "0.99.0",
+    "@vitejs/plugin-vue": "catalog:",
+    "typescript": "catalog:",
+    "vite": "catalog:",
+    "vue": "catalog:",
+    "vue-tsc": "catalog:"
+  }
+}

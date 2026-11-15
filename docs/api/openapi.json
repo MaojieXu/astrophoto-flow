@@ -1,0 +1,740 @@
+{
+  "components": {
+    "schemas": {
+      "HTTPValidationError": {
+        "properties": {
+          "detail": {
+            "items": {
+              "$ref": "#/components/schemas/ValidationError"
+            },
+            "title": "Detail",
+            "type": "array"
+          }
+        },
+        "title": "HTTPValidationError",
+        "type": "object"
+      },
+      "InitResult": {
+        "additionalProperties": false,
+        "description": "Workspace initialization outcome; ``reused`` means existing content won.",
+        "properties": {
+          "database_revision": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Database Revision"
+          },
+          "status": {
+            "enum": [
+              "initialized",
+              "reused"
+            ],
+            "title": "Status",
+            "type": "string"
+          },
+          "version": {
+            "title": "Version",
+            "type": "string"
+          },
+          "workspace": {
+            "title": "Workspace",
+            "type": "string"
+          }
+        },
+        "required": [
+          "status",
+          "version",
+          "workspace"
+        ],
+        "title": "InitResult",
+        "type": "object"
+      },
+      "NodeDefinition": {
+        "additionalProperties": false,
+        "description": "The full native definition of one node type.",
+        "properties": {
+          "definition": {
+            "additionalProperties": true,
+            "title": "Definition",
+            "type": "object"
+          },
+          "node_type": {
+            "title": "Node Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "node_type",
+          "definition"
+        ],
+        "title": "NodeDefinition",
+        "type": "object"
+      },
+      "NodePage": {
+        "additionalProperties": false,
+        "description": "A bounded page of node summaries in stable node_type order.",
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/NodeSummary"
+            },
+            "title": "Items",
+            "type": "array"
+          },
+          "next_cursor": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Next Cursor"
+          },
+          "total": {
+            "minimum": 0.0,
+            "title": "Total",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "items",
+          "total"
+        ],
+        "title": "NodePage",
+        "type": "object"
+      },
+      "NodeSummary": {
+        "additionalProperties": false,
+        "description": "One searchable entry of the engine node catalog.",
+        "properties": {
+          "category": {
+            "title": "Category",
+            "type": "string"
+          },
+          "description": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Description"
+          },
+          "display_name": {
+            "title": "Display Name",
+            "type": "string"
+          },
+          "node_type": {
+            "title": "Node Type",
+            "type": "string"
+          },
+          "output_node": {
+            "title": "Output Node",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "node_type",
+          "display_name",
+          "category",
+          "output_node"
+        ],
+        "title": "NodeSummary",
+        "type": "object"
+      },
+      "OperationReceipt": {
+        "additionalProperties": false,
+        "description": "Lifecycle result persisted under ``run/operations``.",
+        "properties": {
+          "action": {
+            "enum": [
+              "init",
+              "start",
+              "stop"
+            ],
+            "title": "Action",
+            "type": "string"
+          },
+          "created_at": {
+            "title": "Created At",
+            "type": "string"
+          },
+          "message": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Message"
+          },
+          "operation_id": {
+            "title": "Operation Id",
+            "type": "string"
+          },
+          "phase": {
+            "title": "Phase",
+            "type": "string"
+          },
+          "result": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Result"
+          },
+          "status": {
+            "enum": [
+              "accepted",
+              "running",
+              "succeeded",
+              "failed",
+              "unknown"
+            ],
+            "title": "Status",
+            "type": "string"
+          },
+          "updated_at": {
+            "title": "Updated At",
+            "type": "string"
+          },
+          "workspace": {
+            "title": "Workspace",
+            "type": "string"
+          }
+        },
+        "required": [
+          "operation_id",
+          "action",
+          "status",
+          "phase",
+          "workspace",
+          "created_at",
+          "updated_at"
+        ],
+        "title": "OperationReceipt",
+        "type": "object"
+      },
+      "ReadyResult": {
+        "additionalProperties": false,
+        "description": "The startup result MCP already understands; the six fields are stable.",
+        "properties": {
+          "reused": {
+            "default": false,
+            "title": "Reused",
+            "type": "boolean"
+          },
+          "service_url": {
+            "title": "Service Url",
+            "type": "string"
+          },
+          "status": {
+            "const": "ready",
+            "default": "ready",
+            "title": "Status",
+            "type": "string"
+          },
+          "version": {
+            "title": "Version",
+            "type": "string"
+          },
+          "web_url": {
+            "title": "Web Url",
+            "type": "string"
+          },
+          "workspace": {
+            "title": "Workspace",
+            "type": "string"
+          }
+        },
+        "required": [
+          "version",
+          "workspace",
+          "service_url",
+          "web_url"
+        ],
+        "title": "ReadyResult",
+        "type": "object"
+      },
+      "RuntimeStatus": {
+        "additionalProperties": false,
+        "description": "Installation and run state combined for ``workbench_status``.",
+        "properties": {
+          "initialized": {
+            "title": "Initialized",
+            "type": "boolean"
+          },
+          "message": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Message"
+          },
+          "operation_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Operation Id"
+          },
+          "service_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Service Url"
+          },
+          "status": {
+            "enum": [
+              "installing",
+              "stopped",
+              "starting",
+              "ready",
+              "stopping",
+              "unknown"
+            ],
+            "title": "Status",
+            "type": "string"
+          },
+          "version": {
+            "title": "Version",
+            "type": "string"
+          },
+          "web_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Web Url"
+          },
+          "workspace": {
+            "title": "Workspace",
+            "type": "string"
+          }
+        },
+        "required": [
+          "status",
+          "version",
+          "workspace",
+          "initialized"
+        ],
+        "title": "RuntimeStatus",
+        "type": "object"
+      },
+      "ServiceHealth": {
+        "additionalProperties": false,
+        "description": "The service health document; it is public only on loopback.",
+        "properties": {
+          "database": {
+            "title": "Database",
+            "type": "string"
+          },
+          "service_url": {
+            "title": "Service Url",
+            "type": "string"
+          },
+          "status": {
+            "const": "ok",
+            "default": "ok",
+            "title": "Status",
+            "type": "string"
+          },
+          "version": {
+            "title": "Version",
+            "type": "string"
+          },
+          "web_url": {
+            "title": "Web Url",
+            "type": "string"
+          },
+          "workspace": {
+            "title": "Workspace",
+            "type": "string"
+          }
+        },
+        "required": [
+          "version",
+          "workspace",
+          "service_url",
+          "web_url",
+          "database"
+        ],
+        "title": "ServiceHealth",
+        "type": "object"
+      },
+      "ValidationError": {
+        "properties": {
+          "ctx": {
+            "title": "Context",
+            "type": "object"
+          },
+          "input": {
+            "title": "Input"
+          },
+          "loc": {
+            "items": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "integer"
+                }
+              ]
+            },
+            "title": "Location",
+            "type": "array"
+          },
+          "msg": {
+            "title": "Message",
+            "type": "string"
+          },
+          "type": {
+            "title": "Error Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "loc",
+          "msg",
+          "type"
+        ],
+        "title": "ValidationError",
+        "type": "object"
+      }
+    },
+    "securitySchemes": {
+      "WorkbenchBearer": {
+        "scheme": "bearer",
+        "type": "http"
+      }
+    }
+  },
+  "info": {
+    "title": "AstroPhotoFlow Workbench",
+    "version": "0.1.0-dev.1"
+  },
+  "openapi": "3.1.0",
+  "paths": {
+    "/api/v1/nodes": {
+      "get": {
+        "description": "Page through the native node catalog, filtered by a single query.",
+        "operationId": "findNodes",
+        "parameters": [
+          {
+            "description": "Case-insensitive node type, display name or category filter.",
+            "in": "query",
+            "name": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Case-insensitive node type, display name or category filter.",
+              "title": "Query"
+            }
+          },
+          {
+            "description": "Opaque offset returned by the previous page.",
+            "in": "query",
+            "name": "cursor",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Opaque offset returned by the previous page.",
+              "title": "Cursor"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 50,
+              "maximum": 200,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NodePage"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "WorkbenchBearer": []
+          }
+        ],
+        "summary": "Find Nodes"
+      }
+    },
+    "/api/v1/nodes/{node_type}": {
+      "get": {
+        "description": "Return the engine's definition for exactly one node type.",
+        "operationId": "getNode",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "node_type",
+            "required": true,
+            "schema": {
+              "title": "Node Type",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NodeDefinition"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "WorkbenchBearer": []
+          }
+        ],
+        "summary": "Get Node"
+      }
+    },
+    "/api/v1/workbench/init": {
+      "post": {
+        "description": "Re-run initialization on an existing workspace without losing data.",
+        "operationId": "initializeWorkbench",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/InitResult"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "security": [
+          {
+            "WorkbenchBearer": []
+          }
+        ],
+        "summary": "Initialize Workbench"
+      }
+    },
+    "/api/v1/workbench/operations/{operation_id}": {
+      "get": {
+        "operationId": "getWorkbenchOperation",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "operation_id",
+            "required": true,
+            "schema": {
+              "title": "Operation Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OperationReceipt"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "WorkbenchBearer": []
+          }
+        ],
+        "summary": "Get Workbench Operation"
+      }
+    },
+    "/api/v1/workbench/start": {
+      "post": {
+        "description": "Reuse or restart the pair for this workspace.",
+        "operationId": "startWorkbench",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReadyResult"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "security": [
+          {
+            "WorkbenchBearer": []
+          }
+        ],
+        "summary": "Start Workbench"
+      }
+    },
+    "/api/v1/workbench/status": {
+      "get": {
+        "operationId": "getWorkbenchStatus",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RuntimeStatus"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "security": [
+          {
+            "WorkbenchBearer": []
+          }
+        ],
+        "summary": "Get Workbench Status"
+      }
+    },
+    "/api/v1/workbench/stop": {
+      "post": {
+        "description": "Accept the stop and let the detached worker confirm it after this service exits.",
+        "operationId": "stopWorkbench",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OperationReceipt"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "security": [
+          {
+            "WorkbenchBearer": []
+          }
+        ],
+        "summary": "Stop Workbench"
+      }
+    },
+    "/health": {
+      "get": {
+        "description": "Prove the service can serve this workspace; the controller polls it.",
+        "operationId": "getServiceHealth",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ServiceHealth"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Get Service Health"
+      }
+    }
+  }
+}

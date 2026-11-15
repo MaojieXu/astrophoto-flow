@@ -1,0 +1,19 @@
+# Bilingual-pair consistency record for docs/architecture.md ↔ docs/architecture.zh.md: per heading
+# section, a hash of its English and Chinese blocks outside code blocks and generated regions.
+# After editing either side, bring the other along and re-record with:
+#   pnpm run verify-translation-pairing --write docs/architecture.md
+/architecture:
+  en: 7ba816e583ff0fd4
+  zh: f1e4c07f78177775
+/architecture/dependency-owners:
+  en: 7686bd02b9625a7c
+  zh: 89dbf733e2f5a215
+/architecture/native-canvas-and-business-api:
+  en: 0af066ee12cf865c
+  zh: ed590b6aa596bed6
+/architecture/mcp-and-knowledge:
+  en: 095df8df83e11605
+  zh: 9b5b0e9292959e2e
+/architecture/boundaries:
+  en: f2e81c62b85502bb
+  zh: 0a6e8f0b49b92301

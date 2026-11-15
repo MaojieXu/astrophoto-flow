@@ -1,3 +1,15 @@
 # AGENTS.md
 
-AstroPhotoFlow 是本地运行、网页操作的天文图像工作台：持久管理图像素材、数据集、设备与校准，把真实天文处理软件注册为画布节点，并在原生画布上编排、执行、检查与保存结果。人用网页，脚本用 CLI，外部 Agent 用 MCP（可编排、查询、准备并启动工作台，不执行整图）。改源码前读[架构](docs/architecture.md)；文档规则见 [docs/AGENTS.md](docs/AGENTS.md)。
+AstroPhotoFlow is a local astronomy imaging workbench. Read the [architecture](docs/architecture.md) before source changes and the [development reference](docs/development.md) before environment changes.
+
+ComfyUI owns graphs, drafts, saving, undo and execution. FastAPI owns business data and operation receipts; canvas commands use the native bridge. Follow the [ownership proposal](.agents/notes/proposed/architecture/2026-11-14-native-canvas-and-service-receipts.md).
+
+MCP uses FastMCP TS. Only its fixed lifecycle bootstrap may launch the workbench controller; business tools use HTTP. Database writes, retrieval and process ownership remain in the workbench; external agents do not execute whole graphs.
+
+Follow [Windows delivery](docs/release.md): tags produce verified drafts; public publication is a separate manual workflow. Do not change repository visibility or publish packages as part of implementation.
+
+Preserve original files, stable asset identity, dataset order and equipment snapshots. Query unknown operation outcomes before retrying.
+
+Use the declared uv and pnpm environments. Follow the requested verification scope; do not run repository-wide static checks, builds or tests unless requested.
+
+Documentation follows [docs/AGENTS.md](docs/AGENTS.md); decision records follow the [Agent Note rules](.agents/notes/README.md). Update bilingual pairs together.

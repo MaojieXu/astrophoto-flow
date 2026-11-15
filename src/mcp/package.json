@@ -1,0 +1,43 @@
+{
+  "name": "@xu123/astrophoto-flow",
+  "private": true,
+  "type": "module",
+  "license": "GPL-3.0-only",
+  "description": "AstroPhotoFlow local workbench lifecycle tools over MCP stdio",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/MaojieXu/astrophoto-flow.git",
+    "directory": "src/mcp"
+  },
+  "bin": {
+    "astrophotoflow-mcp": "dist/index.js"
+  },
+  "files": [
+    "dist",
+    "LICENSE",
+    "NOTICE"
+  ],
+  "publishConfig": {
+    "access": "public"
+  },
+  "scripts": {
+    "build": "node ../../scripts/build-mcp.ts",
+    "openapi:export": "node ../../scripts/export-openapi.ts",
+    "openapi:generate": "openapi-ts -f openapi-ts.config.ts",
+    "typecheck": "tsc -p . --noEmit"
+  },
+  "packageManager": "pnpm@11.28.5",
+  "engines": {
+    "node": ">=26.8.2 <27"
+  },
+  "dependencies": {
+    "@prefecthq/fastmcp-ts": "1.10.0",
+    "zod": "4.6.5"
+  },
+  "devDependencies": {
+    "@hey-api/openapi-ts": "0.99.0",
+    "@types/node": "^26.0.0",
+    "tsx": "^4.23.13",
+    "typescript": "^6.0.3"
+  }
+}

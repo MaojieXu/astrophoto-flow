@@ -10,7 +10,7 @@ Status: proposed
 
 ## 提案
 
-`src/` 下三个目录，各一个环境：
+`src/` 下有三个运行目录：一个后端 uv 环境、一个前端 pnpm workspace，以及根 pnpm workspace 中的 MCP 包：
 
 ```text
 src/workbench/backend/     # uv environment
@@ -18,25 +18,28 @@ src/workbench/backend/     # uv environment
     astrophotoflow/                 our service package, importable without installing
     custom_nodes/astrophotoflow/    one registration file that points at the package
     web/                            frontend build output, git-ignored
-    pyproject.toml, uv.lock, tests/
+    pyproject.toml, uv.lock
 src/workbench/frontend/    # pnpm environment
     upstream source plus src/platform/astrophotoflow/
-src/mcp/                   # pnpm environment, Node, only talks HTTP
+    packages/astrophotoflow-ui/     private business UI package
+src/mcp/                   # root pnpm workspace, Node, HTTP plus fixed lifecycle actions
 ```
 
 我们的包放在引擎树里，且从不安装：引擎从 `backend/` 起跑，`import astrophotoflow` 按目录位置解析，服务以 `python -m astrophotoflow` 启动。没有 wheel，没有 console script，没有运行期指纹。
 
 目录名保留 `workbench`；产品名仍是 AstroPhotoFlow，这样改目录名永远不会改动产品叫什么。
 
-引擎与我们的 HTTP 服务仍是同一环境里的两个进程。引擎拥有图、队列、进度与取消；我们的服务拥有素材、数据集、回执，以及画布编辑的归属规则。两者分开，意味着引擎崩溃后工作区 API 仍能回答回执相关的问题。
+引擎与 FastAPI 服务是同一个 Python 3.12 环境中的独立进程。ComfyUI 拥有图文件、草稿、保存、撤销、队列、进度与取消；服务拥有素材、数据集、命令准入与收据。HTTPX 调用引擎 aiohttp 桥接，WebSocket 把编辑送到原生页面，遵循[原生画布提案](2026-11-14-native-canvas-and-service-receipts.zh.md)。引擎崩溃不会连带关闭收据 API。
 
-分发按[决定](../simplification/2026-11-14-no-distribution-engineering.zh.md)不做；前端 fork 处于[冻结](../simplification/2026-11-14-freeze-the-frontend-fork.zh.md)状态；工具面是[一个客户端](2026-11-14-node-mcp-for-the-tool-surface.zh.md)。
+[知识库进程](../feature/2026-11-14-agent-knowledge-base-rag.zh.md)属于同一个 uv 环境，但仍是首期生命周期与节点查询实现之外的独立能力。它的代码归 `backend/astrophotoflow/knowledge/`，语料、索引与模型缓存使用独立数据目录。控制器拥有 Python 进程管理。MCP 业务工具保持为 HTTP 客户端；固定生命周期适配器遵循[安装与控制提案](../feature/2026-11-14-mcp-install-start-stop-workbench.zh.md)。两个 Node workspace 都使用 Node 26 与 pnpm 11.28.5。声明的依赖与安装方式见[开发参考](../../../../docs/development.zh.md)。
+
+[agent 交付记录](../../implemented/process/2026-11-14-windows-agent-installation-and-delivery.zh.md)描述当前 Windows 归档与安装器，不使用 Python wheel 或内嵌虚拟环境。[单一 MCP 提案](../feature/2026-11-14-mcp-install-start-stop-workbench.zh.md)取代其中先工作台后 MCP 的预期安装顺序：宿主提供 Node 并先连接 MCP，init 安装工作台，start/stop 调用其控制器。前端 fork 继续[冻结](../simplification/2026-11-14-freeze-the-frontend-fork.zh.md)；业务工具保持为 [HTTP 客户端](2026-11-14-node-mcp-for-the-tool-surface.zh.md)。
 
 ## 数据归属
 
-`backend/astrophotoflow/interfaces/http` 是唯一写入已登记素材、数据集、图或回执的入口。引擎的两处行为必须显式处理，而不是假设它不存在：
+`backend/astrophotoflow/interfaces/http` 是唯一写入已登记素材、数据集或业务收据的入口。原生图持久化仍归 ComfyUI。以下边界必须明确：
 
-- ComfyUI 自带上传与素材路由。它们拥有临时输入与输出；它们不能变成第二条登记路径，原生保存动作也必须经过我们的归属与修订规则。
+- ComfyUI 上传路由拥有临时输入与输出，不登记素材库。图保存与撤销保持原生；科学输出登记经过业务 API。
 - 调用快照记录的是文件内容，不是路径。若原件在规划与执行之间被替换，记录的输入就与实际运行的不再一致；快照要么把字节固定进运行目录，要么在摘要变化时中止调用。
 - 回执在外部调用开始之前持久化，这样重启后仍留下可查询的标识符。
 
@@ -52,14 +55,14 @@ src/mcp/                   # pnpm environment, Node, only talks HTTP
 
 ## 验收标准
 
-- 全新克隆、一次 `uv sync`、一次前端构建、`python main.py`，能打开页面并完成一次真实 Siril 调用。
+- 全新克隆并安装锁定的 Python 与 Node 依赖后，控制器能够启动服务和引擎，并从原生页面完成一次真实 Siril 调用。
 - `uv run pytest` 与 `uv run python main.py` 都在 `backend/` 下运行，且导入路径一致。
 - 不做任何安装步骤时 `import astrophotoflow` 成立。
-- 除 `custom_nodes/astrophotoflow/` 之外，没有目录把我们的文件与上游文件混在一起。
+- 除单个自定义节点注册文件之外，产品代码保留在服务包、私有 UI 包与宿主集成目录中。
 
 ## 风险
 
 - 引擎在运行期读取 `requirements.txt` 报告包版本。只用 `pyproject.toml` 取代它会让这些读取返回 `None`，而部分调用方仍会对结果调用 `.get()`，因此在所有读取方迁移之前，该文件作为兼容输入保留。
 - torch 位于开发环境，所以第一次安装是几分钟与数 GB，而不是几秒。
-- 两个进程共用一个环境，依赖冲突仍然是两者共同的一次性故障点。
+- 引擎、业务服务和检索进程共享一个环境，依赖冲突会影响三者。
 - 若不以上述边界配一条测试，引擎自带的上传路由会悄悄变成第二条数据通路。

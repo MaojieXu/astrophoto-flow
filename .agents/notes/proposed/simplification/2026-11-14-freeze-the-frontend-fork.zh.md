@@ -12,6 +12,8 @@ Status: proposed
 
 把这个 fork 作为钉住 commit 的逐字副本，不追踪上游。改为从内部缩小差异：凡是有扩展点能覆盖的改动，就把改动挪进 `src/platform/astrophotoflow/`，上游文件保持原样。需要在 1.57.1 上验证的四个扩展点是图读写、侧栏标签、节点定义刷新与执行状态。四个都成立，差异就会持续缩小；万一图或侧栏根本够不到，fork 就按现状冻结，我们不再假装它能缩小。
 
+纯业务 UI（用户界面）归 `packages/astrophotoflow-ui/`，宿主集成归 `src/platform/astrophotoflow/`。Pinia 保留原生与本地界面状态，Vue Query 保留业务服务数据与缓存，生成的 OpenAPI 客户端使用 Zod 校验。Tailwind CSS 与现有 PrimeVue/设计系统组件提供控件。[原生画布提案](../architecture/2026-11-14-native-canvas-and-service-receipts.zh.md)把保存、草稿与撤销留在 ComfyUI，不引入另一套编辑器或图存储。
+
 ## 备选方案
 
 **追踪上游，每个版本重新移植。** 否决：每次升级 30 条断掉的导入，换不来用户看得见的收益；我们的改动是集成，不是编辑器功能，上游也没有理由接收它们。

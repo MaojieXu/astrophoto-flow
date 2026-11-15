@@ -77,7 +77,24 @@ describe('checkBoundaries', () => {
     })
     const violations = checkBoundaries(root)
     expect(violations).toHaveLength(1)
-    expect(violations[0]).toContain('over HTTP only')
+    expect(violations[0]).toContain('fixed lifecycle bootstrap')
+  })
+
+  it('permits process creation only in the fixed bootstrap adapter', () => {
+    const root = fixture({
+      'src/mcp/src/lifecycle/bootstrap.ts': "import { execFile } from 'node:child_process'\n",
+      'src/mcp/src/status.ts': "import { execFile } from 'node:child_process'\n",
+    })
+    const violations = checkBoundaries(root)
+    expect(violations).toHaveLength(1)
+    expect(violations[0]).toContain('src/mcp/src/status.ts:1')
+  })
+
+  it('does not let the bootstrap exception import backend code', () => {
+    const root = fixture({
+      'src/mcp/src/lifecycle/bootstrap.ts': "import { runtime } from '../../../workbench/backend/runtime.ts'\n",
+    })
+    expect(checkBoundaries(root)[0]).toContain('must not import')
   })
 
   it('ignores imports written inside Vue comments', () => {

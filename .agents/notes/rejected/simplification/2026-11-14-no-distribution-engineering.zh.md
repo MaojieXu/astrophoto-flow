@@ -1,6 +1,6 @@
 # Agent Note: 在分发层之前停下
 
-Status: proposed
+Status: rejected — 由[Windows agent 交付方案](../../implemented/process/2026-11-14-windows-agent-installation-and-delivery.zh.md)取代。
 
 [English](2026-11-14-no-distribution-engineering.md) | 中文
 
@@ -10,7 +10,7 @@ Status: proposed
 
 ## 提案
 
-安装就是克隆、在 backend 里 `uv sync`、在 frontend 里 `pnpm install`，然后 `python main.py`。需要 agent 时，MCP 从自己的目录安装，是可选项。仓库里没有我们包的打包配置、没有启动器、没有版本清单、没有 bootstrap 工具，也没有 CI workflow。README 给一条实测过的 Windows 路径，从开始到首次调用。
+安装使用克隆与[开发参考](../../../../docs/development.zh.md)中的锁定依赖命令：一个后端 uv 环境、前端 pnpm workspace，以及包含 MCP 的根 pnpm workspace。工作台控制器负责进程启动；单独的 `python main.py` 只启动引擎，不启动业务 API 或检索进程。仓库不需要我们的包打包配置、安装启动器、运行时指纹、bootstrap 工具或 CI workflow。Windows 启动指南必须针对集成后的控制器验证，才能宣称完成首次调用。
 
 门禁留下：它们是旧机器里真正回本的那部分，几秒钟内本地跑完。分发层不是门禁，而是"为别人打包门禁"。
 

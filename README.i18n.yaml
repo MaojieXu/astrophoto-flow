@@ -3,11 +3,11 @@
 # After editing either side, bring the other along and re-record with:
 #   pnpm run verify-translation-pairing --write README.md
 /astrophotoflow:
-  en: c211128fc51fe951
-  zh: 7a7827f16ae56bd0
+  en: a0e6fb2e2c82562f
+  zh: 79f1998e3139c52c
 /astrophotoflow/what-is-here:
-  en: ab6b75021c3c5b79
-  zh: d47911c7d79cd3ae
-/astrophotoflow/checks:
-  en: 13149c6bed2bb80c
-  zh: 1bceaec14e2d969b
+  en: 3f1c817dfc473b13
+  zh: 2feaef8905ac6e98
+/astrophotoflow/dependencies:
+  en: c21f9f34c32e1ffe
+  zh: dce79d4b1e8f2746

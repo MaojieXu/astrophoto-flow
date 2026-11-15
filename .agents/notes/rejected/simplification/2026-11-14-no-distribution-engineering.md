@@ -1,6 +1,6 @@
 # Agent Note: Stop before the distribution layer
 
-Status: proposed
+Status: rejected — Superseded by [Windows agent delivery](../../implemented/process/2026-11-14-windows-agent-installation-and-delivery.md).
 
 English | [中文](2026-11-14-no-distribution-engineering.zh.md)
 
@@ -10,7 +10,7 @@ The previous design carried a distribution layer: a wheel with a 13 MB engine ar
 
 ## Proposal
 
-Installation is a clone, `uv sync` in the backend, `pnpm install` in the frontend, and `python main.py`. MCP is optional and installed from its own directory when an agent is wanted. The repository holds no wheel configuration for our package, no launcher, no version manifest, no bootstrap tool, and no CI workflow. The README carries one tested Windows path, start to first call.
+Installation uses a clone and the locked dependency commands in the [development reference](../../../../docs/development.md): one backend uv environment, the frontend pnpm workspace, and the root pnpm workspace containing MCP. The workbench controller owns process startup; `python main.py` alone starts the engine, not the business API or retrieval process. The repository needs no wheel configuration for our package, installer launcher, runtime fingerprint, bootstrap tool or CI workflow. A Windows startup guide must be verified against the integrated controller before it claims a complete first call.
 
 The gates stay: they are the part of the old machinery that pays for itself, and they run locally in seconds. The distribution layer is not the gates; it is the packaging of them for other people.
 

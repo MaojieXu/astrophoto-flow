@@ -1,0 +1,34 @@
+# Bilingual-pair consistency record for .agents/notes/proposed/architecture/2026-11-14-native-canvas-and-service-receipts.md ↔ .agents/notes/proposed/architecture/2026-11-14-native-canvas-and-service-receipts.zh.md: per heading
+# section, a hash of its English and Chinese blocks outside code blocks and generated regions.
+# After editing either side, bring the other along and re-record with:
+#   pnpm run verify-translation-pairing --write .agents/notes/proposed/architecture/2026-11-14-native-canvas-and-service-receipts.md
+/agent-note-native-graphs-service-receipts:
+  en: fbd0a28085915fb7
+  zh: 6b08e810c57f501c
+/agent-note-native-graphs-service-receipts/problem:
+  en: b318427c52d421ae
+  zh: 3aa907f1511c6f75
+/agent-note-native-graphs-service-receipts/proposal:
+  en: 878cd32e92a3ce34
+  zh: 2b22679ee8cb32b8
+/agent-note-native-graphs-service-receipts/proposal/dependencies-and-ownership:
+  en: b085aa03e8df7706
+  zh: 5878d6bc912d8d70
+/agent-note-native-graphs-service-receipts/proposal/canvas-operations:
+  en: 2ca7f798b1613208
+  zh: 9f9d3ee086405b39
+/agent-note-native-graphs-service-receipts/proposal/calls-and-evidence:
+  en: 1b3cebf8db0a1d87
+  zh: 89dac38456fa56fc
+/agent-note-native-graphs-service-receipts/proposal/native-workflow-references:
+  en: 50c992a1c574e5d9
+  zh: afac9c77e763746f
+/agent-note-native-graphs-service-receipts/alternatives-considered:
+  en: 2f49230ebc308ef7
+  zh: c97d477c90a1ba66
+/agent-note-native-graphs-service-receipts/acceptance-criteria:
+  en: 15e8315993e6ed64
+  zh: b79a26ac63431a34
+/agent-note-native-graphs-service-receipts/risks:
+  en: 07f967dfa6f05a5c
+  zh: 659f188388571673

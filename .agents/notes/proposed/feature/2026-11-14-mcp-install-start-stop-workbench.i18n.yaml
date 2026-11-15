@@ -1,0 +1,28 @@
+# Bilingual-pair consistency record for .agents/notes/proposed/feature/2026-11-14-mcp-install-start-stop-workbench.md ↔ .agents/notes/proposed/feature/2026-11-14-mcp-install-start-stop-workbench.zh.md: per heading
+# section, a hash of its English and Chinese blocks outside code blocks and generated regions.
+# After editing either side, bring the other along and re-record with:
+#   pnpm run verify-translation-pairing --write .agents/notes/proposed/feature/2026-11-14-mcp-install-start-stop-workbench.md
+/agent-note-one-mcp-installs-and-controls-the-workbench:
+  en: d2b372752fed2b14
+  zh: fac17e438721523d
+/agent-note-one-mcp-installs-and-controls-the-workbench/problem:
+  en: 288dbf58f3f69671
+  zh: ef8a0ca80e79cfc6
+/agent-note-one-mcp-installs-and-controls-the-workbench/proposal:
+  en: 698268f0d116f719
+  zh: c906e06b036a8a9e
+/agent-note-one-mcp-installs-and-controls-the-workbench/proposal/scope-and-related-records:
+  en: 752151ee47f7acfd
+  zh: 663564e09a01e0d0
+/agent-note-one-mcp-installs-and-controls-the-workbench/proposal/current-implementation-state:
+  en: 0647bb7a74e01bdc
+  zh: e939a42587610511
+/agent-note-one-mcp-installs-and-controls-the-workbench/alternatives-considered:
+  en: e8ddf491c90419f4
+  zh: 9275d3521d7b4b4a
+/agent-note-one-mcp-installs-and-controls-the-workbench/acceptance-criteria:
+  en: 418bc77b813de39e
+  zh: 7ad11f5939f31bf2
+/agent-note-one-mcp-installs-and-controls-the-workbench/risks:
+  en: 5eb8edbbee753f0a
+  zh: 4cec55681e0de968

@@ -1,13 +1,16 @@
 {
   "name": "astrophotoflow",
-  "version": "0.0.0",
+  "version": "0.1.0-dev.1",
   "private": true,
   "type": "module",
   "packageManager": "pnpm@11.28.5",
   "engines": {
-    "node": ">=24.9.0"
+    "node": ">=26.8.2 <27"
   },
   "scripts": {
+    "release:preflight": "python scripts/release/package.py --preflight",
+    "release:build": "powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File scripts/release/build.ps1",
+    "release:verify": "powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File scripts/release/verify.ps1",
     "test": "vitest run",
     "typecheck": "tsc --noEmit",
     "verify-agent-note-classification": "tsx scripts/verify-agent-note-classification.ts",
@@ -24,7 +27,7 @@
   },
   "devDependencies": {
     "@types/mdast": "^4.0.4",
-    "@types/node": "^24.10.1",
+    "@types/node": "^26.0.0",
     "mdast-util-from-markdown": "^2.0.3",
     "mdast-util-gfm": "^3.1.0",
     "micromark-extension-gfm": "^3.0.0",

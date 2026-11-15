@@ -16,7 +16,7 @@ Delete `comfy_api_nodes/` (101 files, 63,829 lines), `app/assets/` (37 files), `
 
 Then strip the couplings instead of stubbing them: `main.py` loses the database startup, the startup-refusal messages, the scanner pause around each prompt, and the agent host's start and stop; `server.py` loses the asset route registration, the export manager, the upload-time registration and hash resolution; `execution.py` loses the `asset_manager` argument and the output enrichment; `nodes.py` loses the pack gate; `comfy/cli_args.py` loses five switches; `comfy_api/feature_flags.py` reports `"assets": False`. `SERVER_FEATURE_FLAGS` therefore no longer depends on `main.py` rewriting it at startup.
 
-Twenty-two engine tests referenced the removed modules and went with them, along with 129 stale `__pycache__` directories. `tests-unit/app_test` was restored from the reference checkout minus the tests for the asset scanner and the prompt worker's pause behaviour, so the tests for the model, node and custom-node managers still run. `alembic`, `SQLAlchemy` and `alembic.ini` left `requirements.txt` because nothing else imports them.
+Twenty-two engine tests referenced the removed modules and went with them, along with 129 stale `__pycache__` directories. `tests-unit/app_test` was restored from the reference checkout minus the tests for the asset scanner and the prompt worker's pause behaviour, so the tests for the model, node and custom-node managers still run. `alembic`, `SQLAlchemy` and `alembic.ini` are absent from the engine's `requirements.txt`; the shared `pyproject.toml` declares SQLAlchemy and Alembic for the separate business API, without restoring engine database modules.
 
 ## Behaviour that changed
 
@@ -28,6 +28,6 @@ Keep the modules and disable them at startup: every reader still meets the flags
 
 ## Consequences
 
-The engine is now 700 Python files and 231,614 lines, and an eighth of that Python was a single directory: `comfy_api_nodes` alone was 63,829 lines. Nothing here was verified at runtime: this machine has no torch, so the receipts are `python3 -m compileall` returning zero, an empty residual-reference grep for every removed symbol, and a real import of `comfy.cli_args` and `comfy_api.feature_flags` that reports the assets flag as `False` and no asset, agent or database switch. The first start with dependencies installed is the remaining proof.
+The deleted code was concentrated in one directory: `comfy_api_nodes` alone had 101 files and 63,829 lines. Nothing here was verified at runtime: this machine has no torch, so the receipts are `python3 -m compileall` returning zero, an empty residual-reference grep for every removed symbol, and a real import of `comfy.cli_args` and `comfy_api.feature_flags` that reports the assets flag as `False` and no asset, agent or database switch. The first start with dependencies installed is the remaining proof.
 
 Two deletions are still open. The model zoo (`comfy/ldm` and the model loaders around it) is 97,000 lines that stay until the node classes that use them are cut in the same change. The upload and view routes stay for now: they are the only path a browser has for dropping a local file into a graph, and whether that path survives belongs to the frontend cleanup, not to this one.

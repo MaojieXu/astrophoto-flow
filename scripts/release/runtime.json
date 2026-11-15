@@ -1,0 +1,8 @@
+{
+  "repository": "MaojieXu/astrophoto-flow",
+  "uv": {
+    "version": "0.11.11",
+    "sha256": "2f75a0db2c3530b6b3c24434dc38137f61ff1f4e5f2d7b4ddc5bcd142cf58b65"
+  },
+  "python": "3.12.12"
+}

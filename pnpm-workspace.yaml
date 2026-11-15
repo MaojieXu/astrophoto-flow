@@ -1,2 +1,5 @@
+packages:
+  - src/mcp
+
 allowBuilds:
   esbuild: true

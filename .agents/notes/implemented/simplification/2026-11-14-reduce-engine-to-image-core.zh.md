@@ -22,7 +22,7 @@ vendored 引擎是完整的上游 ComfyUI 产品，而不是图像处理库。�
 
 删除只服务已删栈的依赖：`torchvision`、`transformers`、`tokenizers`、`sentencepiece`、`spandrel`、`torchsde`、`filelock` 与 `blake3`。保留 `av`（`comfy_extras/nodes_images.py` 用它输出 AVIF，`comfy/utils.py` 的共享解码器用它处理 EXR 输入与 `/view` 预览）以及其余小型图像/运行时依赖（`einops`、`safetensors`、`kornia`、`PyOpenGL`、`comfy-angle`、`pydantic`、`packaging`）。
 
-`torch` 保留。所有存活的图像节点都消费和产出 `torch.Tensor`（28 个模块导入它）；它是张量运行时，不是训练依赖，因此只装 CPU wheel 即可，不安装 CUDA 或训练栈。本仓库只 vendored 引擎；外围产品仓库才持有资产服务、CLI、MCP 与启动器，并用自己的环境。早先交接里的 Windows lock 与双环境启动器属于那个产品树，不是对本仓库运行时的陈述。
+`torch` 保留。所有存活的图像节点都消费和产出 `torch.Tensor`（28 个模块导入它）；它是张量运行时，不是训练依赖，因此只装 CPU wheel 即可，不安装 CUDA 或训练栈。后端依赖配置也在共享 Python 环境中声明业务与检索库，包括业务 API 使用的 SQLAlchemy 和 Alembic。这些依赖不恢复模型执行或引擎素材数据库。服务、桥接与 MCP 行为遵循活跃的[运行布局提案](../../proposed/architecture/2026-11-13-repository-and-runtime-shape.zh.md)；Windows 参考检出的双环境启动器不是本源码树的运行时。
 
 ## 行为变化
 
@@ -40,7 +40,7 @@ vendored 引擎是完整的上游 ComfyUI 产品，而不是图像处理库。�
 
 ## 后果
 
-后端现在是 201 个 Python 文件、43,589 行，从 581 个文件、175,906 行降下来：删除了 380 个文件、132,317 行。`comfy/` 根目录有 12 个模块，`comfy_extras` 有 30 个文件（28 个白名单加两个辅助文件），`/object_info` 有 116 个类。`pytest tests-unit` 通过 885 个测试。服务器从仓库 `.venv` 启动并加载前端 `dist/`，成功执行了真实的 `LoadImage → ImageScale(128×128) → PreviewImage` 工作流，输出为 128×128 PNG。仅用 `uv sync --frozen` 与同一个 `--front-end-root` 的干净临时副本也能启动、提供本地页面、暴露 116 个类并完成该工作流。EXR 输入与 `/view` 预览通过共享 PyAV 解码器处理；默认 EXR 预览请求 WebP，下载仍取原文件；关闭资产库后，作业完成时输出历史仍会刷新。模板入口已隐藏，因为内置模板都不能被图像核心执行。
+后端现在是 202 个 Python 文件、43,705 行，从 581 个文件、175,906 行降下来：删除了 379 个文件、132,201 行。`comfy/` 根目录有 12 个模块，`comfy_extras` 有 30 个文件（28 个白名单加两个辅助文件），`/object_info` 有 116 个类。`pytest tests-unit` 通过 885 个测试。服务器从仓库 `.venv` 启动并加载前端 `dist/`，成功执行了真实的 `LoadImage → ImageScale(128×128) → PreviewImage` 工作流，输出为 128×128 PNG。仅用 `uv sync --frozen` 与同一个 `--front-end-root` 的干净临时副本也能启动、提供本地页面、暴露 116 个类并完成该工作流。EXR 输入与 `/view` 预览通过共享 PyAV 解码器处理；默认 EXR 预览请求 WebP，下载仍取原文件；关闭资产库后，作业完成时输出历史仍会刷新。模板入口已隐藏，因为内置模板都不能被图像核心执行。
 
 早先“保留上游路由”的提醒已经消失：`/global_subgraphs` 与模型路由现在是删除，而不是留给仍在调用它们的前端。被删除的只是全局蓝图库；用户子图仍从 `userdata/subgraphs/` 加载，并可编辑和保存。`openapi.yaml` 没有重新生成，仍包含一些已删除的模型/子图端点描述；它是文档，不是路由表。前端完整项目运行有 1 个对时序敏感的 `cameraFraming` 失败，单独运行可通过；fork 工具/CI 脚本仍有 32 个失败，因为它们读取被排除的 `.github/` 树。更新后的 subgraph、sidebar、graph-view 与模块边界测试均通过。
 

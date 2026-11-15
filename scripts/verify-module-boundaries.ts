@@ -1,7 +1,8 @@
 /**
  * Enforce the dependency direction recorded in
  * `.agents/notes/proposed/architecture/2026-11-13-repository-and-runtime-shape.md`:
- * `frontend ─HTTP→ backend ←HTTP─ mcp`.
+ * Business calls follow `frontend ─HTTP→ backend ←HTTP─ mcp`; one fixed MCP
+ * bootstrap adapter may invoke the installed lifecycle controller.
  *
  * Only directories we own are scanned. The vendored engine and its frontend are
  * exempt by construction: upstream never imports us, and a rule that scans ten
@@ -37,8 +38,14 @@ const PYTHON_IMPORT = /^[ \t]*import\s+([^\n#]+)/gm
 export const RULES: readonly Rule[] = [
   {
     roots: ['src/mcp'],
-    forbid: [/workbench\//, /\.\.?\/.*python/, /child_process/],
-    message: 'the MCP server reaches the workbench over HTTP only; it must not import or spawn it',
+    forbid: [/workbench\//, /\.\.?\/.*python/],
+    message: 'the MCP server reaches business modules over HTTP only; it must not import them',
+  },
+  {
+    roots: ['src/mcp'],
+    forbid: [/child_process/],
+    message: 'only the fixed lifecycle bootstrap adapter may create a controller process',
+    allow: ['src/mcp/src/lifecycle/bootstrap.ts'],
   },
   {
     roots: ['src/workbench/frontend/packages/astrophotoflow-ui'],

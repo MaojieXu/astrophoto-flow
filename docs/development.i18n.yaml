@@ -1,0 +1,16 @@
+# Bilingual-pair consistency record for docs/development.md ↔ docs/development.zh.md: per heading
+# section, a hash of its English and Chinese blocks outside code blocks and generated regions.
+# After editing either side, bring the other along and re-record with:
+#   pnpm run verify-translation-pairing --write docs/development.md
+/development-environment:
+  en: 318a5126380691f1
+  zh: e958e96dbab607be
+/development-environment/runtimes-and-lockfiles:
+  en: 98c17bf9d03e0844
+  zh: 947f2d99059b6945
+/development-environment/install-dependencies:
+  en: 026fffcbd5caae64
+  zh: 375b9be1adf23656
+/development-environment/configuration-and-verification:
+  en: e9ac2e02db93a1bb
+  zh: 02b5227abc0f9413

@@ -15,3 +15,4 @@ src/workbench/backend/web/
 src/workbench/backend/user/
 src/workbench/backend/tests/inference/samples/exr_previews/
 src/workbench/frontend/dist/
+src/mcp/dist/

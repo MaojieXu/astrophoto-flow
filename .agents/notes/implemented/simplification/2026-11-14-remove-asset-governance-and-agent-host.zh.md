@@ -16,7 +16,7 @@ vendored 引擎带着三个子系统：要么我们已经有，要么永远用�
 
 随后把耦合摘掉，而不是打桩：`main.py` 去掉数据库启动、启动拒绝消息、每次 prompt 前后的扫描器暂停、agent host 的启停；`server.py` 去掉资产路由注册、导出管理器、上传时的登记与哈希解析；`execution.py` 去掉 `asset_manager` 参数与输出富化；`nodes.py` 去掉 pack 门禁；`comfy/cli_args.py` 去掉五个开关；`comfy_api/feature_flags.py` 固定报告 `"assets": False`。于是 `SERVER_FEATURE_FLAGS` 不再依赖 `main.py` 在启动时改写。
 
-二十二个引用被删模块的引擎测试随之删除，另有 129 个陈旧的 `__pycache__` 目录一并清掉。`tests-unit/app_test` 从参考检出恢复，去掉了资产扫描器与 prompt worker 暂停行为的测试，因此模型、节点、自定义节点管理器的测试仍可运行。`alembic`、`SQLAlchemy` 与 `alembic.ini` 从 `requirements.txt` 移除，因为没有其它地方再导入它们。
+二十二个引用被删模块的引擎测试随之删除，另有 129 个陈旧的 `__pycache__` 目录一并清掉。`tests-unit/app_test` 从参考检出恢复，去掉了资产扫描器与 prompt worker 暂停行为的测试，因此模型、节点、自定义节点管理器的测试仍可运行。引擎 `requirements.txt` 不包含 `alembic`、`SQLAlchemy` 与 `alembic.ini`；共享 `pyproject.toml` 为独立业务 API 声明 SQLAlchemy 和 Alembic，不恢复引擎数据库模块。
 
 ## 行为变化
 
@@ -28,6 +28,6 @@ vendored 引擎带着三个子系统：要么我们已经有，要么永远用�
 
 ## 后果
 
-引擎现在是 700 个 Python 文件、231,614 行，其中八分之一的 Python 只是一个目录：`comfy_api_nodes` 就有 63,829 行。本次没有任何运行时验证：这台机器没有 torch，所以回执是 `python3 -m compileall` 返回零、被删符号的残留引用 grep 为空、以及真实导入 `comfy.cli_args` 与 `comfy_api.feature_flags` 后显示资产标志为 `False` 且无资产、agent、数据库开关。装上依赖后的首次启动是剩余的那一步证明。
+被删掉的代码集中在一个目录：仅 `comfy_api_nodes` 就有 101 个文件、63,829 行。本次没有任何运行时验证：这台机器没有 torch，所以回执是 `python3 -m compileall` 返回零、被删符号的残留引用 grep 为空、以及真实导入 `comfy.cli_args` 与 `comfy_api.feature_flags` 后显示资产标志为 `False` 且无资产、agent、数据库开关。装上依赖后的首次启动是剩余的那一步证明。
 
 两处删除仍未做。模型动物园（`comfy/ldm` 及其周边的模型加载器）有 97,000 行，要等到使用它们的节点类在同一次改动中被切除才走。上传与查看路由暂时保留：它们是浏览器把本地文件拖进图的唯一通道，而这条通道是否保留属于前端清理的范围，不属于本次。

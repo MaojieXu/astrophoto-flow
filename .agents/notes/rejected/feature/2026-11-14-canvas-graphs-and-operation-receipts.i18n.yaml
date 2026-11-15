@@ -1,10 +1,10 @@
-# Bilingual-pair consistency record for .agents/notes/proposed/feature/2026-11-14-canvas-graphs-and-operation-receipts.md ↔ .agents/notes/proposed/feature/2026-11-14-canvas-graphs-and-operation-receipts.zh.md: per heading
+# Bilingual-pair consistency record for .agents/notes/rejected/feature/2026-11-14-canvas-graphs-and-operation-receipts.md ↔ .agents/notes/rejected/feature/2026-11-14-canvas-graphs-and-operation-receipts.zh.md: per heading
 # section, a hash of its English and Chinese blocks outside code blocks and generated regions.
 # After editing either side, bring the other along and re-record with:
-#   pnpm run verify-translation-pairing --write .agents/notes/proposed/feature/2026-11-14-canvas-graphs-and-operation-receipts.md
+#   pnpm run verify-translation-pairing --write .agents/notes/rejected/feature/2026-11-14-canvas-graphs-and-operation-receipts.md
 /agent-note-a-canvas-edit-is-an-operation-with-a-receipt:
-  en: d67535c1f48e5ceb
-  zh: 2fa5dfb6dbdae9ee
+  en: e6802997c2b2190a
+  zh: 8dac177f1dc5039a
 /agent-note-a-canvas-edit-is-an-operation-with-a-receipt/problem:
   en: 6ceb18f2f54a53a0
   zh: 5f696cebd5b6f966

@@ -4,24 +4,22 @@ English | [中文](README.zh.md)
 
 AstroPhotoFlow is a local astronomy imaging workbench driven from the browser: it keeps image assets and datasets, registers real astronomy software as canvas nodes, and lets you assemble, run, inspect, and save results on a native canvas. People work in the web app, scripts drive the CLI, and external agents use the platform MCP server, which orchestrates and queries but never executes a graph.
 
-This repository holds the layer those rules live in. The product source tree is not in place yet: the rewrite starts from the process the code has to satisfy.
+The repository contains the image-only ComfyUI engine and frontend forks, dependency configurations, MCP lifecycle tools and Windows delivery scripts. Business-service and retrieval integration are specified by the active proposals. Release verification requires their real entry points before it accepts an installable workbench.
 
 ## What is here
 
-- `AGENTS.md` — standing orders for agents working in this repository.
-- `.agents/notes/` — the decision corpus, its lifecycle rules, and the frozen archive.
-- `.agents/skills/` — the procedures that keep notes, documentation, and translations consistent.
-- `docs/AGENTS.md` — the documentation standard; `docs/i18n/` — the bilingual pairing contract.
-- `scripts/` — the gates that check all of the above.
+- [Architecture](docs/architecture.md) — dependency owners, native canvas ownership and communication boundaries.
+- [Development](docs/development.md) — runtimes, dependency installation and environment isolation.
+- [Windows delivery](docs/release.md) — agent installation, MCP startup and reviewed publication.
+- [Agent Notes](.agents/notes/README.md) — proposals, implemented decisions and frozen history.
+- [Documentation rules](docs/AGENTS.md) — document placement and bilingual maintenance.
 
-## Checks
+## Dependencies
 
-Install dependencies once, then run the gates:
+Use Node 26 and pnpm 11.28.5 from the repository root:
 
 ```sh
-pnpm install
-pnpm check
-pnpm check:full
+pnpm install --frozen-lockfile --ignore-scripts
 ```
 
-`pnpm check` runs the documentation, notes, and pairing gates; `pnpm check:full` adds typechecking and unit tests. Each failure names the rule it enforces.
+The [development reference](docs/development.md) covers the separate frontend workspace and the uv-managed Python environment. Verification follows the scope requested for the task.

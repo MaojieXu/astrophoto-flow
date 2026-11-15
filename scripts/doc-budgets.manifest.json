@@ -1,4 +1,6 @@
 {
+  "AGENTS.md": 260,
+  "README.md": 280,
   ".agents/notes/README.md": 1950,
   ".agents/notes/archived/AGENTS.md": 156,
   ".agents/notes/implemented/AGENTS.md": 145,
@@ -6,5 +8,8 @@
   "docs/i18n/README.md": 1300,
   "docs/i18n/pipeline.md": 350,
   "docs/i18n/translation-rules.md": 1290,
-  "docs/licensing.md": 360
+  "docs/licensing.md": 360,
+  "docs/architecture.md": 650,
+  "docs/development.md": 520,
+  "docs/release.md": 1000
 }

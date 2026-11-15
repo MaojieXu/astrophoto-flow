@@ -6,15 +6,17 @@ English | [中文](2026-11-14-workbench-settings-and-lifecycle.zh.md)
 
 ## Problem
 
-The old workbench split configuration across a workspace `config.toml`, a user-level pointer file, a runtime `processes.json`, and environment overrides. It worked, but it made "what is actually running" a question with several answers, and a settings save could not be applied without a restart. The new repository runs from a clone with one Python environment and no installer; it needs a smaller contract: one user-edited file, one workspace, and a restart that is explicit rather than inferred.
+The old workbench split configuration across a workspace `config.toml`, a user-level pointer file, a runtime `processes.json`, and environment overrides. It worked, but it made "what is actually running" a question with several answers, and a settings save could not be applied without a restart. The new layout shares one Python environment across a checkout or a versioned installation; it needs a smaller contract: one user-edited file, one workspace, and a restart that is explicit rather than inferred.
 
 ## Proposal
 
 One workspace has exactly one user-edited `config.toml`. Runtime state files record what the controller started, but they are not configuration and are never hand-edited.
 
+The [single-MCP lifecycle proposal](2026-11-14-mcp-install-start-stop-workbench.md) owns installation, the init/start/stop/status tool contract and the first Windows lifecycle-and-node-query scope. This note retains workspace configuration and controller state ownership; its earlier prohibition on MCP stop is superseded by that proposal.
+
 ### Location and schema
 
-The config path comes from `--workspace` or `ASTROPHOTOFLOW_CONFIG`; there is no user-level default-workspace pointer. A workspace is the directory that contains `config.toml`; running two workspaces means running two processes with different paths, not switching a global default.
+The config path comes from `--workspace` or `ASTROPHOTOFLOW_CONFIG`; there is no user-level default-workspace pointer. A workspace is the directory that contains `config.toml`; running two workspaces means running separate process groups with different paths, not switching a global default.
 
 The file has a strict, closed schema:
 
@@ -42,17 +44,17 @@ The workspace layout is `config.toml`, `data/`, `input/`, `output/`, `logs/`, `c
 
 ### Processes and ports
 
-The controller starts two processes from the same environment: our HTTP service and the engine. The service serves the API and the library; the engine serves the canvas and executes graphs. Both bind loopback only.
+The controller starts the FastAPI/Uvicorn business service and the aiohttp engine as separate processes from the backend uv environment. The service owns the business API and library; ComfyUI owns graph files, drafts, saving, undo, the canvas and execution. The [knowledge process](2026-11-14-agent-knowledge-base-rag.md) is a later independent capability in that same environment, not an entry point to fake for this phase. All listeners bind loopback only. MCP stays in the root Node workspace and invokes fixed lifecycle actions; Python owns the actual process identity and management.
 
 The configured service port and the first allowed origin port are preferences, not guarantees. If a port is occupied, the controller takes the next free port and rewrites the allowed origins to the actual engine port for that run. The actual ports are recorded in `run/processes.json` with the workspace path, config path, effective settings, and process identities. A second start on the same workspace reuses a ready process; a partial or unknown state is refused rather than duplicated.
 
 ### Lifecycle
 
-`start` prepares the workspace if needed, starts the service, waits for its health endpoint, starts the engine, and waits for readiness. `status` reports each process as managed, unconfirmed, exited, or not managed, and reports ports as managed, available, or occupied-unverified. `stop` stops only processes whose pid, creation time, executable, command line, and workspace marker all match the recorded identity; if the marker differs, it refuses. The service is asked to drain before it is terminated.
+`init` downloads and prepares the workbench through the fixed installation worker, then calls the shared workspace initializer. `start` requires completed initialization, starts the service and waits for health, then starts the engine and waits for readiness. Retrieval readiness is separate and cannot block the canvas. `status` distinguishes installation from runtime and reports each process as managed, unconfirmed, exited, or not managed. `stop` refuses busy queues and unknown identities, then drains and stops only processes whose pid, creation time, executable, command line, and workspace marker match. It preserves installation and workspace data and confirms exit before reporting success.
 
 `restart` runs out of process and records an operation id. The controller writes a receipt before it exits; a caller that loses the connection queries the receipt by operation id instead of starting a second restart. Restart is refused while a native queue item, a software call, a bundle preview, or an unknown operation is active.
 
-`start` and `status` are available to the MCP surface. `stop`, `restart`, and configuration writes are not: an external agent may prepare and start a workbench, but it may not take one down or change its settings.
+`workbench_init`, `workbench_start`, `workbench_stop` and `workbench_status` are available through the one MCP server. Init creates a new workspace without overwriting an existing configuration; stop is scoped to verified owned workspace processes and leaves MCP callable. Restart, arbitrary settings writes and force-stop remain outside this tool contract.
 
 ### Settings and save semantics
 
@@ -91,7 +93,8 @@ Language is not a config key. The single source is `Comfy.Locale` in the workspa
 - `status` distinguishes managed, unconfirmed, exited, and not-managed processes.
 - `stop` refuses a process whose workspace marker does not match.
 - `restart` is refused while a queue item, software call, or unknown operation is active, and its receipt is queryable by operation id.
-- MCP can start and inspect the workbench but cannot stop, restart, or write configuration.
+- One MCP can download and initialize, start, inspect and stop its workbench; it exposes no restart, arbitrary settings write or force-stop.
+- Repeated init preserves configuration and data; stopped workbenches can be started again without reconnecting MCP.
 - Language changes go through `Comfy.Locale`, not a config key.
 - Settings UI changes live in our platform layer; no upstream settings file is edited.
 

@@ -1,6 +1,6 @@
 # Agent Note: 画布编辑是带回执的操作
 
-Status: proposed
+Status: rejected — 由[原生图归属与服务收据方案](../../proposed/architecture/2026-11-14-native-canvas-and-service-receipts.zh.md)取代。
 
 [English](2026-11-14-canvas-graphs-and-operation-receipts.md) | 中文
 

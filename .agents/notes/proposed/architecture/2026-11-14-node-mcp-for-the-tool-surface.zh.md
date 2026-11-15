@@ -6,15 +6,17 @@ Status: proposed
 
 ## Problem
 
-旧 MCP 服务器暴露了 126 个工具，它们与 CLI 从同一份服务目录生成。它的领域操作已经是 HTTP 调用，但进程还读取工作区配置、服务令牌和进程文件，并且能启动工作台。这种形态鼓励了两个错误：把每条 HTTP 路由都当成 agent 工具，以及让 MCP 进程变成第二个知道如何写素材库的地方。新仓库需要一个小型、任务形态的表面，帮助 agent 查找图像、准备导入、组装图并读取回执，同时不给它数据库句柄、停止按钮或领域的第二份实现。
+旧 MCP 服务器暴露了 126 个工具，它们与 CLI 从同一份服务目录生成。它的领域操作已经是 HTTP 调用，但进程还读取工作区配置、服务令牌和进程文件，并且能启动工作台。这种形态鼓励了两个错误：把每条 HTTP 路由都当成 agent 工具，以及让 MCP 进程变成第二个知道如何写素材库的地方。新仓库需要一个小型、任务形态的表面，帮助 agent 查找图像、准备导入、组装图并读取回执，同时不给它数据库句柄、不受限的进程控制或领域的第二份实现。
 
 ## Proposal
 
-MCP 服务器是一个 Node 进程，通过 HTTP 与工作台服务通信。它不拥有数据库、SQLite 文件或素材库写入路径。它暴露大约十五个任务工具，而不是每条路由一个工具。
+MCP 服务器在 Node 包 `src/mcp` 中使用 `@prefecthq/fastmcp-ts` 和 Zod 4，通过根 pnpm workspace 安装。Node HTTP 客户端调用工作台 API。FastMCP TS 负责工具注册、校验与 stdio；该包不持有数据库、SQLite 文件、检索引擎或素材库写入路径。工具目录按任务组织，而不是每条路由一个工具。
+
+[单一 MCP 安装与控制提案](../feature/2026-11-14-mcp-install-start-stop-workbench.zh.md)维护生命周期安装、启动与停止。它部分取代本记录原先的外部安装、仅启动生命周期和禁止停止的策略；下文业务目录与 HTTP 归属仍然有效。
 
 ### 运行时与传输
 
-服务器运行在与前端相同的 Node 线（`>=26.8.2 <27`）上，使用 stdio。它由 MCP 客户端启动，而不是由工作台启动。它读取两个本地东西：工作区路径（来自自身配置或环境变量）和派生路径 `data/service.token` 上的 bearer 令牌。它读取 `run/processes.json` 以了解当前运行的实际服务和引擎端口；它永远不打开 SQLite 数据库。
+服务器运行在与前端相同的 Node 线（`>=26.8.2 <27`）上，使用 stdio。它由 MCP 客户端启动，而不是由工作台启动。连接参数选择安装根目录与工作区，并提供 Windows 默认值。连接不要求已有安装收据：init 创建它，status 区分安装进度与运行状态，start 在初始化后检查实时身份。业务客户端从配置的数据目录下派生的 `service.token` 路径读取 bearer 令牌。MCP 从不打开 SQLite 数据库。
 
 令牌是唯一的秘密。它永远不会被记录、不会出现在工具结果里，也不会作为工具参数被接受。
 
@@ -25,21 +27,21 @@ MCP 服务器是一个 Node 进程，通过 HTTP 与工作台服务通信。它�
 - **查找**：`assets_find`、`assets_get`、`datasets_find`、`datasets_get`、`calibration_find`、`nodes_find`、`nodes_get`。结果带稳定 id、紧凑事实和游标；它们不会倾倒整张表。
 - **准备导入**：`imports_inspect`、`imports_preflight`、`imports_submit`。检查和预检是只读的并返回 `review_token`；提交需要该令牌和调用方提供的 `request_id`。
 - **观察任务**：`tasks_status`、`tasks_wait`。两者接受任务 id 或请求 id，并返回逐阶段进度，而不是原始日志。
-- **组装图**：`canvas_get`、`canvas_add_data`、`canvas_edit`。它们需要页面 id、工作流 id、图 id 和内容令牌；编辑工具还需要 `operation_id`。
+- **组装图**：`canvas_get`、`canvas_add_data`、`canvas_edit`。它们需要页面 id、工作流 id、图 id 和内容标记；编辑工具还需要 `operation_id`。[原生页面桥接](2026-11-14-native-canvas-and-service-receipts.zh.md)应用编辑并保留原生保存与撤销；这些工具不提交整图执行。
 - **读取结果**：`receipts_get`。回执按 `operation_id` 或 `request_id` 寻址，包含结果、受影响的 id 和错误。
-- **工作台**：`workbench_status`、`workbench_start`。服务停止时状态仍然可用。启动会准备并启动工作台；它是唯一暴露的生命周期操作。
+- **工作台**：`workbench_init`、`workbench_start`、`workbench_stop`、`workbench_status`。Init 通过固定安装 worker 下载并初始化匹配的工作台；status 观察其持久结果与运行状态。Start 启动或复用已初始化工作台，返回已核实的 `web_url`。Stop 只终止已核实归属的工作区进程，保留安装与数据。并发、繁忙拒绝与未知结果归生命周期提案维护。
 
-没有 `stop`、没有 `restart`、没有设置写入、没有数据库查询、没有任意文件读取、没有 shell 工具。
+没有 `restart`、任意设置写入、数据库查询、任意文件读取或 shell 工具。Init 与 stop 是显式且限定范围的生命周期能力，不是通用进程或文件系统工具。
 
 ### 契约与错误
 
-服务的 OpenAPI 文档是 schema 来源。签入的快照和生成器产生 MCP 校验器；当快照与运行中的服务不一致时，契约测试失败。只有在生成器无法表达约束的地方才允许手写 Zod schema，而那些 schema 仍然参与漂移检查。
+FastAPI 服务的 OpenAPI 文档是 schema 来源。签入的快照和 `@hey-api/openapi-ts` 为独立的前端与 MCP 消费方生成 TypeScript 客户端和 Zod 校验器；MCP 从不导入 UI 包。快照与运行中服务不一致时，契约测试失败。只有生成器无法表达约束时才允许手写 Zod schema，这些 schema 仍参与漂移检查。
 
 每个业务工具都带请求 id 调用 HTTP API。服务错误变成结构化工具错误，包含服务代码、消息、字段路径和请求 id。服务停止返回 `WORKBENCH_NOT_RUNNING`，并提示调用 `workbench_start`；它不会自动启动。超时返回 `TRANSPORT_TIMEOUT`；连接失败返回 `SERVICE_UNAVAILABLE`。未知结果按同一个 `operation_id` 或 `request_id` 查询，永远不用新 id 重试。
 
 ### 保留在本地的部分
 
-MCP 进程可以读取配置以找到工作区，可以读取进程文件以找到实际端口。它可以通过本地控制器启动工作台。它不能写配置、停止进程、重启进程或直接编辑素材库。如果未来工具需要本地操作，它走服务或控制器，而不是私有代码路径。
+只有固定生命周期引导适配器可启动包内 PowerShell 安装 worker，或以固定控制器动作调用已安装的 uv 可执行文件。Init 必须在 Python 或业务服务不存在时可用。适配器不从工具参数接受可执行文件、脚本、URL 或 PID，也不导入后端模块。Python 控制器拥有进程身份、并发、就绪与停止；业务工具使用 HTTP。安装可以创建新的工作区配置，但必须保留已有配置与数据。这是对[当前交付实现](../../implemented/process/2026-11-14-windows-agent-installation-and-delivery.zh.md)的拟扩展，不表示现有安装器或启动适配器已经提供 init 和 stop。
 
 本地参考语料是一个独立的只读模块，不是另一条领域路径；[它的笔记](../feature/2026-11-14-agent-knowledge-base-rag.zh.md)规定了 agent 如何检索并引用它。
 
@@ -57,19 +59,21 @@ CLI 仍然是人类与运维表面。它调用同一 HTTP API 和同一控制器
 
 **在第一次业务调用时自动启动工作台。** 否决：只读查询不应该启动两个进程，而工具调用中途的启动失败很难解释。`workbench_start` 是显式的。
 
-**为了对称暴露 stop 和 restart。** 否决：外部 agent 不应该关掉人类正在使用的工作台。停止和重启留在 CLI 与网页表面。
+**为了对称暴露 stop 和 restart。** 原提案为避免 agent 关闭人类工作台而拒绝两者。如今明确的 init/start/stop 需求通过[限定范围的生命周期提案](../feature/2026-11-14-mcp-install-start-stop-workbench.zh.md)取代禁止 stop 的限制；繁忙状态和进程身份检查继续保护不相关实例。Restart 仍不进入 MCP 目录。
 
 **像以前那样为每个工具生成 CLI 命令。** 否决：它复制目录，而且生成的命令只是同一批 HTTP 调用的薄包装。CLI 可以只暴露人类真正会脚本化的少数操作。
 
 ## Acceptance criteria
 
 - MCP 服务器不打开 SQLite 数据库，也不包含素材库写入路径。
-- 工具列表是任务形态的，不包含 stop、restart、设置写入、任意文件或 shell 工具。
+- 工具列表是任务形态的，包含限定范围的 init/start/stop/status 生命周期，不包含 restart、任意设置写入、任意文件或 shell 工具。
+- MCP 在安装前即可连接；init 下载并初始化一个工作台，不安装第二个 MCP；status 区分受理与完成。
 - 服务停止时业务工具返回 `WORKBENCH_NOT_RUNNING`；`workbench_start` 是唯一的自动启动路径。
 - 令牌从派生路径读取，永不记录，也永不作为工具参数接受。
 - 当签入的 schema 快照与运行中的服务不一致时，契约测试失败。
 - 错误保留服务代码、消息、字段路径和请求 id。
 - 未知结果按同一个操作或请求 id 查询，不用新 id 重试。
+- Stop 保留工作区，并让 MCP 仍可调用；再次 start 能返回已核实的网页。
 - 服务停止时 `workbench_status` 仍然可用，并报告受管理、未确认、已退出和未管理状态。
 - 服务器在前端的 Node 线上通过 stdio 运行。
 

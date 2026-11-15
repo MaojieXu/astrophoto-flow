@@ -1,6 +1,6 @@
 # Agent Note: A canvas edit is an operation with a receipt
 
-Status: proposed
+Status: rejected — Superseded by [native graph ownership and service receipts](../../proposed/architecture/2026-11-14-native-canvas-and-service-receipts.md).
 
 English | [中文](2026-11-14-canvas-graphs-and-operation-receipts.zh.md)
 

@@ -47,12 +47,12 @@ The workbench may expose a read-only `bundle_status` result and a link to the ma
 
 Before removing or updating a bundle, the manager must ask the workbench for references. The workbench returns:
 
-- saved graphs that pin the exact bundle version;
+- native saved workflows that pin the exact bundle version;
 - active software calls using the bundle;
 - receipts that have not reached a terminal state;
 - any prepared runtime directory the call still needs.
 
-If the workbench is unreachable, the manager refuses a destructive operation rather than guessing. If references exist, the manager shows them and requires an explicit confirmation; it does not delete files under an active call.
+Saved-workflow references come from a read-only native adapter under the [canvas ownership proposal](2026-11-14-native-canvas-and-service-receipts.md), not a second graph database. If the workbench is unreachable or native references cannot be verified, the manager refuses a destructive operation rather than guessing. If references exist, the manager shows them and requires an explicit confirmation; it does not delete files under an active call.
 
 Removing a bundle never deletes library assets, datasets, graphs, or receipts. A graph that pinned the removed version becomes unavailable and refuses to run; it does not silently fall back to another version. Reinstalling the same `package_id` and `bundle_version` with the same descriptor hash restores the graph.
 
