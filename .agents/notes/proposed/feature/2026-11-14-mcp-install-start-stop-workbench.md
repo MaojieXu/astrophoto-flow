@@ -16,6 +16,8 @@ Start and stop invoke the fixed installed Python controller. The controller shar
 
 Installation and runtime state remain distinct. Repeated initialization preserves workspace data; repeated start reuses the instance; stop retains installation and data and leaves MCP connected. Busy or unknown process state is refused rather than forced. Only the lifecycle bootstrap adapter may create the fixed installation/controller processes; tools accept no arbitrary command, URL or PID.
 
+MCP and workbench are one release unit: every upgrade builds, verifies and publishes both with the same version, owned by the root package version. Init selects the matching release automatically; callers do not configure a workbench version. Before reusing an installation or starting it, compare its receipt version with the MCP version. On mismatch, do not silently reuse it: report both versions and provide an upgrade path that preserves the workspace, configuration and data. Do not switch versions while the managed workbench is running or its state is unknown; a failed upgrade must leave the previous installation usable. The exact upgrade interaction remains to be designed.
+
 Windows candidate packaging verifies the actual sequence MCP → init → start → node query → stop → start. Candidate snapshots are installable locally but cannot be publicly published. Formal releases retain clean tagged source, asset checksums, native Windows verification and manual publication of the same bytes.
 
 ### Scope and related records
@@ -27,6 +29,8 @@ The [implemented delivery record](../../implemented/process/2026-11-14-windows-a
 ### Current implementation state
 
 Part of this lifecycle shipped on Windows x64. Shipped: `workbench_init`, `workbench_start`, `workbench_status` and `workbench_stop` in the npm package; the PowerShell installer behind the fixed detached Node worker; the Python controller that owns process identity, startup and stop; node queries over HTTP; and a local candidate that runs the real MCP, installer, controller, service and engine through install, init, start, node queries, stop and restart.
+
+The current receipt checks root and workspace identity but does not compare its version with the MCP version; mismatch refusal and the upgrade path are not implemented.
 
 Unverified: browser rendering, canvas interaction and JavaScript errors; stop refusal while the queue is busy or a prompt is being validated; concurrent installation and recovery from an abnormal installer exit; and first installation from a public GitHub Release or npm, which used a local candidate manifest instead. The candidate is `publishable: false`, and no tag, npm publication, GitHub release or repository visibility change happened. These open branches keep this record proposed rather than implemented.
 
@@ -45,6 +49,7 @@ The implementation phase covers lifecycle control and native node queries on Win
 ## Acceptance criteria
 
 - One MCP can connect before a workbench is installed and complete init, start and stop.
+- MCP and workbench releases have the same version; an existing mismatched installation is not silently reused or started, and a verified upgrade preserves workspace data and the previous installation on failure.
 - Init downloads and initializes real software; status distinguishes acceptance from completion and permits interrupted retries without losing data.
 - Start returns the verified native web URL; node queries return the real engine catalog through FastAPI.
 - Stop affects only verified owned processes, preserves workspace content and leaves MCP usable for another start.

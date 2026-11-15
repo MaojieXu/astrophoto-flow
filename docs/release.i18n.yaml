@@ -3,8 +3,8 @@
 # After editing either side, bring the other along and re-record with:
 #   pnpm run verify-translation-pairing --write docs/release.md
 /windows-delivery:
-  en: 214fdcfc504bfaee
-  zh: 085d918765e21c30
+  en: c47eedb74b89cca2
+  zh: 090948d0cea73fb7
 /windows-delivery/version-and-assets:
   en: 6f2b17ef2aed7259
   zh: ead4a86f55e23796

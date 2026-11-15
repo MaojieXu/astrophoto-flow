@@ -2,7 +2,7 @@
 
 [English](release.md) | 中文
 
-Windows x64 交付流程把工作台打包给 agent（智能体）安装，再通过 npm MCP 包暴露启动与状态能力。GitHub Releases 承载工作台产物；npm 承载 `@xu123/astrophoto-flow`。[发行组装器](../scripts/release/package.py)强制检查源码与运行时前提。
+Windows x64 交付流程把工作台打包给 agent（智能体）安装，再通过 npm MCP 包暴露启动与状态能力。GitHub Releases 承载工作台产物；npm 承载 `@xu016/astrophoto-flow`。[发行组装器](../scripts/release/package.py)强制检查源码与运行时前提。
 
 ## 版本与产物
 
@@ -16,7 +16,7 @@ Windows x64 交付流程把工作台打包给 agent（智能体）安装，再�
 
 ```sh
 pnpm release:preflight
-pnpm --filter @xu123/astrophoto-flow build
+pnpm --filter @xu016/astrophoto-flow build
 python scripts/release/package.py --mcp-only --output .artifacts/mcp-review
 ```
 

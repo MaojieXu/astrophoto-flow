@@ -2,7 +2,7 @@
 
 English | [中文](release.zh.md)
 
-The Windows x64 delivery flow packages the workbench for an agent to install, then exposes startup and status through the npm MCP package. GitHub Releases carries workstation assets; npm carries `@xu123/astrophoto-flow`. Source and runtime prerequisites are enforced by the [release assembler](../scripts/release/package.py).
+The Windows x64 delivery flow packages the workbench for an agent to install, then exposes startup and status through the npm MCP package. GitHub Releases carries workstation assets; npm carries `@xu016/astrophoto-flow`. Source and runtime prerequisites are enforced by the [release assembler](../scripts/release/package.py).
 
 ## Version and assets
 
@@ -16,7 +16,7 @@ From the repository root:
 
 ```sh
 pnpm release:preflight
-pnpm --filter @xu123/astrophoto-flow build
+pnpm --filter @xu016/astrophoto-flow build
 python scripts/release/package.py --mcp-only --output .artifacts/mcp-review
 ```
 

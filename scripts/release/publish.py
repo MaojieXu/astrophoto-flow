@@ -70,7 +70,7 @@ def validate(directory, tag):
         raise ValueError('Verification and manifest disagree about the publication channel.')
     if report['artifacts'] != hashes or not REQUIRED_CHECKS.issubset(report['checks']):
         raise ValueError('Windows verification is incomplete or belongs to different assets.')
-    if manifest['mcp']['name'] != '@xu123/astrophoto-flow' or manifest['mcp']['version'] != manifest['version']:
+    if manifest['mcp']['name'] != '@xu016/astrophoto-flow' or manifest['mcp']['version'] != manifest['version']:
         raise ValueError('MCP and workstation release identities differ.')
     with (directory / manifest['mcp']['file']).open('rb') as stream:
         integrity = 'sha512-' + base64.b64encode(hashlib.file_digest(stream, 'sha512').digest()).decode()

@@ -16,6 +16,8 @@ Start 与 stop 调用固定的已安装 Python 控制器。控制器与类型化
 
 安装与运行状态分别维护。重复初始化保留工作区数据；重复 start 复用实例；stop 保留安装与数据，并让 MCP 保持连接。繁忙或身份未知时拒绝操作，不强制处理。只有生命周期引导适配器可创建固定安装器或控制器进程；工具不接受任意命令、URL 或 PID。
 
+MCP 与工作台作为一个发行单元：每次升级都以根包版本为权威，为两者构建、验证并发布相同版本。Init 自动选择匹配的发行版；调用方不配置工作台版本。复用安装或启动前，应将安装收据版本与 MCP 版本比较。不一致时不得静默复用：报告两个版本，并提供保留工作区、配置和数据的升级路径。受管工作台正在运行或状态未知时不得切换版本；升级失败必须让旧安装仍可使用。具体升级交互仍待设计。
+
 Windows 候选包验证真实的 MCP → init → start → 节点查询 → stop → start 顺序。候选快照可在本地安装，不能公开发布。正式发行保留干净的已打 tag 源码、产物校验值、Windows 原生验证和同一批字节的人工发布。
 
 ### 范围与相关记录
@@ -27,6 +29,8 @@ Windows 候选包验证真实的 MCP → init → start → 节点查询 → sto
 ### 当前实现状态
 
 本生命周期的一部分已在 Windows x64 发布。已发布：npm 包中的 `workbench_init`、`workbench_start`、`workbench_status` 与 `workbench_stop`；位于固定 detached Node worker 之后的 PowerShell 安装器；拥有进程身份、启动与停止的 Python 控制器；通过 HTTP 的节点查询；以及一个本地候选包，用真实 MCP、安装器、控制器、服务与引擎跑通 install、init、start、节点查询、stop 与再 start。
+
+当前收据检查安装根目录与工作区身份，但不比较收据版本与 MCP 版本；版本不匹配时的拒绝机制及升级路径尚未实现。
 
 未验证：浏览器渲染、画布交互与 JavaScript 错误；忙碌队列或正在校验 prompt 时拒绝 stop；并发安装与安装器异常退出的恢复；以及从公开 GitHub Release 或 npm 首次安装——本轮使用的是本地候选 manifest。该候选包为 `publishable: false`，未执行打 tag、npm 发布、GitHub 发行或仓库可见性变更。这些未完成分支是本记录仍为 proposed 而非 implemented 的原因。
 
@@ -45,6 +49,7 @@ Windows 候选包验证真实的 MCP → init → start → 节点查询 → sto
 ## Acceptance criteria
 
 - 一个 MCP 能在工作台未安装时连接，并完成 init、start 和 stop。
+- MCP 与工作台发行版本相同；已有安装版本不匹配时不得静默复用或启动，经过验证的升级须保留工作区数据，失败时保留可用的旧安装。
 - Init 下载并初始化真实软件；status 区分受理与完成，允许中断重试而不丢失数据。
 - Start 返回已核实的原生网页地址；节点查询通过 FastAPI 返回真实引擎目录。
 - Stop 只影响核实归属的进程，保留工作区内容，并让 MCP 能再次 start。

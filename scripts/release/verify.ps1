@@ -154,7 +154,7 @@ try {
     $McpPrefix = Join-Path $Temporary 'mcp install'
     $Install = Invoke-Program $Npm @('install', '--prefix', $McpPrefix, '--no-audit', '--no-fund', '--loglevel', 'error', $Tarball) 900000
     if ($Install.ExitCode -ne 0) { throw ('npm could not install the MCP tarball: ' + $Install.Stderr) }
-    $McpEntry = Join-Path $McpPrefix 'node_modules/@xu123/astrophoto-flow/dist/index.js'
+    $McpEntry = Join-Path $McpPrefix 'node_modules/@xu016/astrophoto-flow/dist/index.js'
     if (-not (Test-Path -LiteralPath $McpEntry)) { throw 'The installed MCP has no dist/index.js entry point.' }
     $Result.checks += 'mcp-tarball-install'
 
